@@ -1,0 +1,18 @@
+{
+	"required": true,
+	"package": "de.devknochen.linkpreview.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"ChatComponentAccessor",
+		"ChatComponentLineMixin",
+		"ChatComponentMixin",
+		"ConfirmLinkScreenMixin",
+		"ConfirmScreenMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

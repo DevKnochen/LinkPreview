@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "linkpreview",
+	"version": "${version}",
+	"name": "LinkPreview",
+	"icon": "assets/linkpreview/icon.png",
+	"description": "See what links in chat are about before clicking them, safely and automatically. ",
+	"authors": ["DevKnochen"],
+	"license": "Apache-2.0",
+	"contact": {
+		"sources": "https://github.com/DevKnochen/LinkPreview",
+		"issues": "https://github.com/DevKnochen/LinkPreview/issues"
+	},
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"de.devknochen.linkpreview.LinkPreviewClient"
+		]
+	},
+	"mixins": [
+		"linkpreview.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.15.0",
+		"minecraft": "~26.1",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
