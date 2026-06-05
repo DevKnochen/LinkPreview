@@ -1,6 +1,5 @@
 package de.devknochen.linkpreview;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -21,8 +20,11 @@ public final class PreviewService {
 	private static final Gson GSON = new Gson();
 	public static final int REQUEST_TIMEOUT_MILLIS = 5000;
 	private static final int MAX_CACHE_ENTRIES = 128;
+	private static final int MAX_LOG_BODY_LENGTH = 300;
 	private static final String PREVIEW_ENDPOINT = "https://linkpreview-worker.knochenn.de/preview";
+	static final String CLIENT_HEADER = "X-LinkPreview-Client";
 	static final String CLIENT_TOKEN = "lp_a5108d4106aa4db3bad90438006ff7c69e35b8bbc65f4dd3927c1c9dc93664f2";
+	static final String CLIENT_AUTHORIZATION = "Bearer " + CLIENT_TOKEN;
 
 	private final HttpClient httpClient;
 	private final Map<String, PreviewResponse> cache;
@@ -63,7 +65,8 @@ public final class PreviewService {
 			request = HttpRequest.newBuilder(workerUri(url))
 					.timeout(Duration.ofMillis(REQUEST_TIMEOUT_MILLIS))
 					.header("Accept", "application/json")
-					.header("X-LinkPreview-Client", CLIENT_TOKEN)
+					.header("Authorization", CLIENT_AUTHORIZATION)
+					.header(CLIENT_HEADER, CLIENT_TOKEN)
 					.GET()
 					.build();
 		} catch (IllegalArgumentException exception) {
@@ -76,12 +79,12 @@ public final class PreviewService {
 					LinkPreviewClient.LOGGER.debug("Link preview request failed for {}", url, exception);
 					return Optional.empty();
 				})
-				.whenComplete((preview, exception) -> inFlight.remove(url));
+				.whenComplete((ignoredPreview, ignoredException) -> inFlight.remove(url));
 	}
 
 	private Optional<PreviewResponse> parseResponse(String url, HttpResponse<String> response) {
 		if (response.statusCode() < 200 || response.statusCode() >= 300) {
-			LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned HTTP {} for {}: {}", response.statusCode(), url, limit(response.body(), 300));
+			LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned HTTP {} for {}: {}", response.statusCode(), url, limit(response.body()));
 			return Optional.empty();
 		}
 
@@ -89,33 +92,32 @@ public final class PreviewService {
 			PreviewResponse preview = GSON.fromJson(response.body(), PreviewResponse.class);
 
 			if (preview == null || preview.isEmpty()) {
-				LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned empty metadata for {}: {}", url, limit(response.body(), 300));
+				LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned empty metadata for {}: {}", url, limit(response.body()));
 				return Optional.empty();
 			}
 
 			cache.put(url, preview);
 			return Optional.of(preview);
 		} catch (JsonSyntaxException exception) {
-			LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned invalid JSON for {}: {}", url, limit(response.body(), 300), exception);
+			LinkPreviewClient.LOGGER.warn("LinkPreview Worker returned invalid JSON for {}: {}", url, limit(response.body()), exception);
 			return Optional.empty();
 		}
 	}
 
-	private static String limit(String text, int maxLength) {
+	private static String limit(String text) {
 		if (text == null) {
 			return "";
 		}
 
 		String normalized = text.replaceAll("\\s+", " ").trim();
-		if (normalized.length() <= maxLength) {
+		if (normalized.length() <= MAX_LOG_BODY_LENGTH) {
 			return normalized;
 		}
 
-		return normalized.substring(0, maxLength - 3) + "...";
+		return normalized.substring(0, MAX_LOG_BODY_LENGTH - 3) + "...";
 	}
 
 	private URI workerUri(String url) {
-		String separator = PREVIEW_ENDPOINT.contains("?") ? "&" : "?";
-		return URI.create(PREVIEW_ENDPOINT + separator + "url=" + URLEncoder.encode(url, StandardCharsets.UTF_8));
+		return URI.create(PREVIEW_ENDPOINT + "?url=" + URLEncoder.encode(url, StandardCharsets.UTF_8));
 	}
 }

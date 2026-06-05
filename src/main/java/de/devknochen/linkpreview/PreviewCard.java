@@ -4,31 +4,23 @@ import java.util.List;
 
 final class PreviewCard {
 	private final long id;
-	private final String url;
 	private String site;
 	private String title;
 	private List<String> descriptionLines;
-	private final int createdTick;
 	private final boolean imageExpected;
 	private PreviewImage image;
 	private boolean imageFailed;
 
-	PreviewCard(long id, String url, String site, String title, List<String> descriptionLines, int createdTick, boolean imageExpected) {
+	PreviewCard(long id, String site, String title, List<String> descriptionLines, boolean imageExpected) {
 		this.id = id;
-		this.url = url;
 		this.site = site;
 		this.title = title;
 		this.descriptionLines = List.copyOf(descriptionLines);
-		this.createdTick = createdTick;
 		this.imageExpected = imageExpected;
 	}
 
 	long id() {
 		return id;
-	}
-
-	String url() {
-		return url;
 	}
 
 	String site() {
@@ -41,10 +33,6 @@ final class PreviewCard {
 
 	List<String> descriptionLines() {
 		return descriptionLines;
-	}
-
-	int createdTick() {
-		return createdTick;
 	}
 
 	PreviewImage image() {

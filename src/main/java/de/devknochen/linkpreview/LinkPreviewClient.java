@@ -47,7 +47,7 @@ public final class LinkPreviewClient implements ClientModInitializer {
 				cardStore::render
 		);
 
-		ClientReceiveMessageEvents.ALLOW_CHAT.register((message, playerChatMessage, sender, boundChatType, timeStamp) -> {
+		ClientReceiveMessageEvents.ALLOW_CHAT.register((message, playerChatMessage, sender, _, _) -> {
 			String rawMessage = message.getString();
 			List<String> urls = UrlExtractor.findUrls(rawMessage);
 			if (urls.isEmpty()) {
@@ -92,16 +92,15 @@ public final class LinkPreviewClient implements ClientModInitializer {
 
 	private static void fetchPreviews(List<PendingPreview> previews, PreviewService previewService, PreviewRenderer renderer) {
 		for (PendingPreview preview : previews) {
-			previewService.fetch(preview.url()).thenAccept(response -> renderer.complete(preview.id(), preview.url(), response));
+			previewService.fetch(preview.url()).thenAccept(response -> response.ifPresentOrElse(
+					previewResponse -> renderer.complete(preview.id(), preview.url(), previewResponse),
+					() -> renderer.discard(preview.id())
+			));
 		}
 	}
 
 	private static void insertLinkMessageWithPreviewSpace(String rawMessage, List<PendingPreview> previews, GuiMessageSource source, MessageSignature signature, GameProfile sender) {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui == null) {
-			return;
-		}
-
 		Component message = LinkifiedText.from(rawMessage);
 		if (source == GuiMessageSource.PLAYER) {
 			message = decorateForChatHeads(minecraft, message, sender);
@@ -131,19 +130,15 @@ public final class LinkPreviewClient implements ClientModInitializer {
 
 	private static void reservePreviewSpace(List<PendingPreview> previews) {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui == null) {
-			return;
-		}
-
 		for (PendingPreview preview : previews) {
 			for (int line = 0; line < PreviewCardStore.spacerLines(true); line++) {
-				addSilentMessage(minecraft, PreviewCardStore.spacerComponent(preview.id()), GuiMessageSource.SYSTEM_CLIENT, null);
+				addSilentMessage(minecraft, PreviewCardStore.spacerComponent(preview.id()));
 			}
 		}
 	}
 
-	private static void addSilentMessage(Minecraft minecraft, Component message, GuiMessageSource source, MessageSignature signature) {
-		GuiMessage guiMessage = new GuiMessage(minecraft.gui.getGuiTicks(), message, signature, source, null);
+	private static void addSilentMessage(Minecraft minecraft, Component message) {
+		GuiMessage guiMessage = new GuiMessage(minecraft.gui.getGuiTicks(), message, null, GuiMessageSource.SYSTEM_CLIENT, null);
 		ChatComponentAccessor chat = (ChatComponentAccessor) minecraft.gui.getChat();
 		chat.linkpreview$addMessageToDisplayQueue(guiMessage);
 		chat.linkpreview$addMessageToQueue(guiMessage);

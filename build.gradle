@@ -25,6 +25,13 @@ dependencies {
 	
 }
 
+configurations.configureEach {
+	resolutionStrategy.force(
+			"io.netty:netty-codec-http:4.2.13.Final",
+			"org.apache.logging.log4j:log4j-core:2.25.4"
+	)
+}
+
 processResources {
 	def version = project.version
 	inputs.property "version", version
