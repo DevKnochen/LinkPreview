@@ -1,7 +1,6 @@
 package de.devknochen.linkpreview;
 
 import java.net.URI;
-import java.util.Optional;
 
 import net.minecraft.client.Minecraft;
 
@@ -9,6 +8,8 @@ public final class PreviewRenderer {
 	private static final int MAX_TITLE_LENGTH = 120;
 	private static final int MAX_DESCRIPTION_LENGTH = 180;
 	private static final int MAX_SITE_LENGTH = 48;
+	private static final int DESCRIPTION_WRAP_WIDTH = 58;
+	private static final int DESCRIPTION_WRAP_LINES = 2;
 
 	private final PreviewCardStore cardStore;
 	private final PreviewImageService imageService;
@@ -19,33 +20,39 @@ public final class PreviewRenderer {
 	}
 
 	public long reserve(String sourceUrl) {
-		Minecraft minecraft = Minecraft.getInstance();
-		int createdTick = minecraft.gui == null ? 0 : minecraft.gui.getGuiTicks();
 		long id = cardStore.nextId();
-		cardStore.reserve(id, sourceUrl, limit(hostName(sourceUrl), MAX_SITE_LENGTH), createdTick);
+		cardStore.reserve(id, limit(hostName(sourceUrl), MAX_SITE_LENGTH));
 		return id;
 	}
 
-	public void complete(long previewId, String sourceUrl, Optional<PreviewResponse> preview) {
+	public void complete(long previewId, String sourceUrl, PreviewResponse preview) {
 		Minecraft minecraft = Minecraft.getInstance();
 		minecraft.execute(() -> completeOnClientThread(minecraft, previewId, sourceUrl, preview));
 	}
 
-	private void completeOnClientThread(Minecraft minecraft, long previewId, String sourceUrl, Optional<PreviewResponse> maybePreview) {
-		if (minecraft.gui == null || maybePreview.isEmpty() || maybePreview.get().isEmpty()) {
+	public void discard(long previewId) {
+		Minecraft.getInstance().execute(() -> cardStore.discard(previewId));
+	}
+
+	private void completeOnClientThread(Minecraft minecraft, long previewId, String sourceUrl, PreviewResponse preview) {
+		if (preview.isEmpty()) {
 			cardStore.discard(previewId);
 			return;
 		}
 
-		PreviewResponse preview = maybePreview.get();
 		String site = limit(preview.displaySiteName(hostName(sourceUrl)), MAX_SITE_LENGTH);
 		String title = limit(preview.displayTitle(sourceUrl), MAX_TITLE_LENGTH);
 		String description = limit(preview.displayDescription(), MAX_DESCRIPTION_LENGTH);
 		boolean hasImage = preview.hasImage();
-		cardStore.update(previewId, site, title, wrap(description, 58, 2));
+		cardStore.update(previewId, site, title, wrap(description));
 
 		if (hasImage) {
-			imageService.fetch(sourceUrl).thenAccept(image -> minecraft.execute(() -> cardStore.attachImage(previewId, image)));
+			imageService.fetch(sourceUrl)
+					.thenApply(image -> image.flatMap(PreviewCardStore::decodeImage))
+					.thenAccept(image -> minecraft.execute(() -> image.ifPresentOrElse(
+							preparedImage -> cardStore.attachImage(previewId, preparedImage),
+							() -> cardStore.markImageUnavailable(previewId)
+					)));
 		} else {
 			LinkPreviewClient.LOGGER.warn("LinkPreview metadata contains no image for {}", sourceUrl);
 			cardStore.markImageUnavailable(previewId);
@@ -72,7 +79,7 @@ public final class PreviewRenderer {
 		return normalized.substring(0, maxLength - 3) + "...";
 	}
 
-	private static java.util.List<String> wrap(String text, int maxLineLength, int maxLines) {
+	private static java.util.List<String> wrap(String text) {
 		String normalized = text == null ? "" : text.replaceAll("\\s+", " ").trim();
 		if (normalized.isBlank()) {
 			return java.util.List.of();
@@ -81,22 +88,22 @@ public final class PreviewRenderer {
 		java.util.List<String> lines = new java.util.ArrayList<>();
 		String remaining = normalized;
 
-		while (!remaining.isBlank() && lines.size() < maxLines) {
-			if (remaining.length() <= maxLineLength) {
+		while (!remaining.isBlank() && lines.size() < DESCRIPTION_WRAP_LINES) {
+			if (remaining.length() <= DESCRIPTION_WRAP_WIDTH) {
 				lines.add(remaining);
 				break;
 			}
 
-			int split = remaining.lastIndexOf(' ', maxLineLength);
+			int split = remaining.lastIndexOf(' ', DESCRIPTION_WRAP_WIDTH);
 			if (split < 24) {
-				split = maxLineLength;
+				split = DESCRIPTION_WRAP_WIDTH;
 			}
 
 			String line = remaining.substring(0, split).trim();
 			remaining = remaining.substring(split).trim();
 
-			if (lines.size() == maxLines - 1 && !remaining.isBlank()) {
-				line = limit(line + " " + remaining, maxLineLength);
+			if (lines.size() == DESCRIPTION_WRAP_LINES - 1 && !remaining.isBlank()) {
+				line = limit(line + " " + remaining, DESCRIPTION_WRAP_WIDTH);
 				remaining = "";
 			}
 

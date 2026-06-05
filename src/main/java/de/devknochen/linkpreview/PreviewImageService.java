@@ -11,7 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class PreviewImageService {
-	private static final int MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+	private static final int MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 	private static final Pattern YOUTUBE_ID = Pattern.compile("(?:youtu\\.be/|youtube\\.com/(?:watch\\?[^#]*?v=|embed/|shorts/))([A-Za-z0-9_-]{11})");
 
 	private final HttpClient httpClient;
@@ -26,35 +26,29 @@ public final class PreviewImageService {
 	}
 
 	private CompletableFuture<Optional<byte[]>> requestImage(String pageUrl) {
-		Optional<String> youtubeId = youtubeId(pageUrl);
-		if (youtubeId.isPresent()) {
-			return requestYouTubeImage(youtubeId.get()).thenCompose(image -> {
-				if (image.isPresent()) {
-					return CompletableFuture.completedFuture(image);
-				}
-
-				return requestWorkerImage(pageUrl);
-			}).whenComplete((result, exception) -> inFlight.remove(pageUrl));
-		}
-
-		return requestWorkerImage(pageUrl);
+		return youtubeId(pageUrl)
+				.map(videoId -> requestYouTubeImage(videoId)
+						.thenCompose(image -> image.isPresent() ? CompletableFuture.completedFuture(image) : requestWorkerImage(pageUrl))
+						.whenComplete((ignoredResult, ignoredException) -> inFlight.remove(pageUrl)))
+				.orElseGet(() -> requestWorkerImage(pageUrl));
 	}
 
 	private CompletableFuture<Optional<byte[]>> requestWorkerImage(String pageUrl) {
 		HttpRequest request = HttpRequest.newBuilder(PreviewService.workerUri("/image", pageUrl))
 				.timeout(Duration.ofMillis(PreviewService.REQUEST_TIMEOUT_MILLIS))
-				.header("Accept", "image/png,image/jpeg,image/webp,image/gif")
-				.header("X-LinkPreview-Client", PreviewService.CLIENT_TOKEN)
+				.header("Accept", "image/png,image/jpeg,image/gif,*/*;q=0.5")
+				.header("Authorization", PreviewService.CLIENT_AUTHORIZATION)
+				.header(PreviewService.CLIENT_HEADER, PreviewService.CLIENT_TOKEN)
 				.GET()
 				.build();
 
 		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
 				.thenApply(this::parseResponse)
-				.exceptionally(exception -> {
-					LinkPreviewClient.LOGGER.debug("Link preview image request failed for {}", pageUrl, exception);
+				.exceptionally(failure -> {
+					LinkPreviewClient.LOGGER.debug("Link preview image request failed for {}", pageUrl, failure);
 					return Optional.empty();
 				})
-				.whenComplete((result, exception) -> inFlight.remove(pageUrl));
+				.whenComplete((ignoredResult, ignoredException) -> inFlight.remove(pageUrl));
 	}
 
 	private CompletableFuture<Optional<byte[]>> requestYouTubeImage(String videoId) {
@@ -66,13 +60,13 @@ public final class PreviewImageService {
 	private CompletableFuture<Optional<byte[]>> requestImageUrl(String url) {
 		HttpRequest request = HttpRequest.newBuilder(java.net.URI.create(url))
 				.timeout(Duration.ofMillis(PreviewService.REQUEST_TIMEOUT_MILLIS))
-				.header("Accept", "image/jpeg,image/png,image/webp")
+				.header("Accept", "image/jpeg,image/png,image/gif,*/*;q=0.5")
 				.GET()
 				.build();
 
 		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
 				.thenApply(this::parseResponse)
-				.exceptionally(exception -> Optional.empty());
+				.exceptionally(ignored -> Optional.empty());
 	}
 
 	private static Optional<String> youtubeId(String pageUrl) {

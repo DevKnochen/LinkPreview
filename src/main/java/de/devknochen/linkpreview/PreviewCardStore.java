@@ -1,6 +1,8 @@
 package de.devknochen.linkpreview;
 
 import java.awt.image.BufferedImage;
+import java.awt.AlphaComposite;
+import java.awt.Graphics2D;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -9,10 +11,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,6 +22,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import com.mojang.blaze3d.platform.NativeImage;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.stream.ImageInputStream;
+
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -41,16 +49,18 @@ public final class PreviewCardStore {
 	private static final int TEXT_SPACER_LINES = 9;
 	private static final int IMAGE_SPACER_LINES = 9;
 
+	private static final int CARD_X = -4;
 	private static final int MAX_STORED_CARDS = 100;
 	private static final int MIN_CARD_WIDTH = 320;
 	private static final int CARD_PADDING = 10;
 	private static final int THUMBNAIL_RIGHT_INSET = 14;
 	private static final int THUMBNAIL_WIDTH = 112;
 	private static final int THUMBNAIL_HEIGHT = 63;
-	private static final float THUMBNAIL_VERTICAL_CROP_BIAS = 0.75F;
 	private static final int EMOJI_SIZE = 10;
 	private static final int EMOJI_TEXTURE_SIZE = 32;
-	private static final int GAP = 6;
+	private static final int MAX_GIF_FRAMES = 120;
+	private static final int MIN_GIF_FRAME_DELAY_MILLIS = 20;
+	private static final int DEFAULT_GIF_FRAME_DELAY_MILLIS = 100;
 	private static final int ACCENT = 0xFF2F81F7;
 	private static final int TEXT = 0xFFE6EDF3;
 	private static final int MUTED = 0xFF9CA3AF;
@@ -71,15 +81,13 @@ public final class PreviewCardStore {
 		return Component.literal(SPACER_MARKER_PREFIX + previewId + "]");
 	}
 
-	public synchronized PreviewCard reserve(long id, String url, String site, int createdTick) {
-		PreviewCard card = new PreviewCard(id, url, site, "Loading preview", List.of(), createdTick, true);
-		cards.add(0, card);
+	public synchronized void reserve(long id, String site) {
+		PreviewCard card = new PreviewCard(id, site, "Loading preview", List.of(), true);
+		cards.addFirst(card);
 
 		while (cards.size() > MAX_STORED_CARDS) {
-			release(cards.remove(cards.size() - 1));
+			release(cards.removeLast());
 		}
-
-		return card;
 	}
 
 	public synchronized void update(long cardId, String site, String title, List<String> descriptionLines) {
@@ -99,33 +107,21 @@ public final class PreviewCardStore {
 		}
 
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui == null) {
-			return;
-		}
-
 		ChatComponentAccessor accessor = (ChatComponentAccessor) minecraft.gui.getChat();
 		String marker = spacerMarker(cardId);
 		accessor.linkpreview$trimmedMessages().removeIf(line -> marker.equals(line.parent().content().getString()));
 		accessor.linkpreview$allMessages().removeIf(message -> marker.equals(message.content().getString()));
 	}
 
-	public synchronized void attachImage(long cardId, Optional<byte[]> imageBytes) {
-		if (imageBytes.isEmpty()) {
-			markImageUnavailable(cardId);
-			return;
-		}
-
+	synchronized void attachImage(long cardId, PreparedPreviewImage preparedImage) {
 		for (PreviewCard card : cards) {
 			if (card.id() == cardId) {
-				PreviewImage image = createImage(cardId, imageBytes.get());
-				if (image == null) {
-					card.markImageFailed();
-				} else {
-					card.image(image);
-				}
+				card.image(createImage(cardId, preparedImage));
 				return;
 			}
 		}
+
+		preparedImage.close();
 	}
 
 	public synchronized void markImageUnavailable(long cardId) {
@@ -137,12 +133,8 @@ public final class PreviewCardStore {
 		}
 	}
 
-	public synchronized void render(GuiGraphicsExtractor graphics, DeltaTracker deltaTracker) {
+	public synchronized void render(GuiGraphicsExtractor graphics, @SuppressWarnings("unused") DeltaTracker deltaTracker) {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.gui == null) {
-			return;
-		}
-
 		if (cards.isEmpty()) {
 			return;
 		}
@@ -153,7 +145,7 @@ public final class PreviewCardStore {
 		ChatComponentAccessor accessor = (ChatComponentAccessor) chat;
 		List<GuiMessage.Line> lines = accessor.linkpreview$trimmedMessages();
 		int scroll = accessor.linkpreview$chatScrollbarPos();
-		int visibleLines = Math.min(chat.getLinesPerPage(), Math.max(0, lines.size() - scroll));
+		int visibleLines = Math.clamp(lines.size() - scroll, 0, chat.getLinesPerPage());
 		if (visibleLines <= 0) {
 			return;
 		}
@@ -172,7 +164,7 @@ public final class PreviewCardStore {
 		graphics.pose().translate(4.0F, 0.0F);
 
 		try {
-			graphics.enableScissor(-4, clipTop, -4 + chatWidth, chatBottom);
+			graphics.enableScissor(CARD_X, clipTop, CARD_X + chatWidth, chatBottom);
 			try {
 				drawVisibleCards(graphics, font, lines, scroll, visibleLines, lineHeight, chatBottom, now, chatFocused, chatWidth, hover);
 			} finally {
@@ -205,25 +197,25 @@ public final class PreviewCardStore {
 					int reservedTop = chatBottom - (runStart - scroll + runLength) * lineHeight;
 					float alpha = chatFocused ? 1.0F : lineAlpha(now, lines.get(Math.max(runStart, scroll)));
 					if (alpha > 1.0E-5F) {
-						drawCard(graphics, font, card, -4, reservedTop, cardWidth, Math.min(cardHeight(card), runLength * lineHeight), alpha, hover);
+						drawCard(graphics, font, card, reservedTop, cardWidth, Math.min(cardHeight(card), runLength * lineHeight), alpha, hover);
 					}
 				}
 			}
 		}
 	}
 
-	private void drawCard(GuiGraphicsExtractor graphics, Font font, PreviewCard card, int x, int y, int width, int height, float alpha, HoverState hover) {
-		int imageX = x + width - THUMBNAIL_RIGHT_INSET - THUMBNAIL_WIDTH;
-		int textRight = x + width - CARD_PADDING;
+	private void drawCard(GuiGraphicsExtractor graphics, Font font, PreviewCard card, int y, int width, int height, float alpha, HoverState hover) {
+		int imageX = CARD_X + width - THUMBNAIL_RIGHT_INSET - THUMBNAIL_WIDTH;
+		int textRight = CARD_X + width - CARD_PADDING;
 		if (card.imageExpected()) {
 			textRight = imageX - CARD_PADDING;
 		}
-		float backgroundOpacity = ((Double) Minecraft.getInstance().options.textBackgroundOpacity().get()).floatValue();
-		float textOpacity = ((Double) Minecraft.getInstance().options.chatOpacity().get()).floatValue() * 0.9F + 0.1F;
-		graphics.fill(x, y, x + width, y + height, ARGB.black(alpha * backgroundOpacity));
-		graphics.fill(x, y, x + 3, y + height, withAlpha(ACCENT, alpha * textOpacity));
+		float backgroundOpacity = Minecraft.getInstance().options.textBackgroundOpacity().get().floatValue();
+		float textOpacity = Minecraft.getInstance().options.chatOpacity().get().floatValue() * 0.9F + 0.1F;
+		graphics.fill(CARD_X, y, CARD_X + width, y + height, ARGB.black(alpha * backgroundOpacity));
+		graphics.fill(CARD_X, y, CARD_X + 3, y + height, withAlpha(ACCENT, alpha * textOpacity));
 
-		int textX = x + CARD_PADDING + 5;
+		int textX = CARD_X + CARD_PADDING + 5;
 		int lineY = y + CARD_PADDING;
 
 		drawText(graphics, font, clip(font, card.site(), textRight - textX), textX, lineY, withAlpha(MUTED, alpha * textOpacity));
@@ -256,31 +248,26 @@ public final class PreviewCardStore {
 		graphics.fill(imageX - 1, imageY - 1, imageX + THUMBNAIL_WIDTH + 1, imageY + THUMBNAIL_HEIGHT + 1, withAlpha(0xFF0B0D10, alpha * 0.8F));
 
 		if (card.image() != null) {
+			card.image().updateAnimation(System.currentTimeMillis());
 			int sourceWidth = card.image().width();
 			int sourceHeight = card.image().height();
-			float targetAspect = (float) THUMBNAIL_WIDTH / THUMBNAIL_HEIGHT;
-			float sourceAspect = (float) sourceWidth / sourceHeight;
-			int cropWidth = sourceWidth;
-			int cropHeight = sourceHeight;
-			if (sourceAspect > targetAspect) {
-				cropWidth = Math.max(1, Math.round(sourceHeight * targetAspect));
-			} else if (sourceAspect < targetAspect) {
-				cropHeight = Math.max(1, Math.round(sourceWidth / targetAspect));
-			}
-			int cropX = (sourceWidth - cropWidth) / 2;
-			int cropY = Math.round((sourceHeight - cropHeight) * THUMBNAIL_VERTICAL_CROP_BIAS);
+			float scale = Math.min((float) THUMBNAIL_WIDTH / sourceWidth, (float) THUMBNAIL_HEIGHT / sourceHeight);
+			int targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+			int targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+			int targetX = imageX + (THUMBNAIL_WIDTH - targetWidth) / 2;
+			int targetY = imageY + (THUMBNAIL_HEIGHT - targetHeight) / 2;
 
 			graphics.blit(
 					RenderPipelines.GUI_TEXTURED,
 					card.image().textureId(),
-					imageX,
-					imageY,
-					cropX,
-					cropY,
-					THUMBNAIL_WIDTH,
-					THUMBNAIL_HEIGHT,
-					cropWidth,
-					cropHeight,
+					targetX,
+					targetY,
+					0,
+					0,
+					targetWidth,
+					targetHeight,
+					sourceWidth,
+					sourceHeight,
 					sourceWidth,
 					sourceHeight,
 					withAlpha(0xFFFFFFFF, alpha)
@@ -408,7 +395,7 @@ public final class PreviewCardStore {
 		static PreviewImage get(String emoji) {
 			Optional<PreviewImage> cached = CACHE.get(emoji);
 			if (cached != null) {
-				return cached.orElse(null);
+				return cached.isPresent() ? cached.get() : null;
 			}
 
 			Optional<PreviewImage> fontImage = createFromFont(emoji);
@@ -475,19 +462,17 @@ public final class PreviewCardStore {
 
 			HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
 					.thenApply(response -> response.statusCode() >= 200 && response.statusCode() < 300 ? Optional.of(response.body()) : Optional.<byte[]>empty())
-					.exceptionally(exception -> Optional.empty())
-					.thenAccept(bytes -> Minecraft.getInstance().execute(() -> finishGoogleFetch(emoji, bytes)));
+					.exceptionally(ignored -> Optional.empty())
+					.thenAccept(bytes -> Minecraft.getInstance().execute(() -> bytes.ifPresentOrElse(
+							body -> finishGoogleFetch(emoji, body),
+							() -> failGoogleFetch(emoji)
+					)));
 		}
 
-		private static void finishGoogleFetch(String emoji, Optional<byte[]> bytes) {
+		private static void finishGoogleFetch(String emoji, byte[] bytes) {
 			FETCHING.remove(emoji);
-			if (bytes.isEmpty()) {
-				CACHE.put(emoji, Optional.empty());
-				return;
-			}
-
 			try {
-				NativeImage nativeImage = downscaleEmoji(readImage(bytes.get()));
+				NativeImage nativeImage = downscaleEmoji(readImage(bytes));
 				Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
 				DynamicTexture texture = new DynamicTexture(() -> "LinkPreview Google emoji", nativeImage);
 				Minecraft.getInstance().getTextureManager().register(id, texture);
@@ -495,6 +480,11 @@ public final class PreviewCardStore {
 			} catch (IOException exception) {
 				CACHE.put(emoji, Optional.empty());
 			}
+		}
+
+		private static void failGoogleFetch(String emoji) {
+			FETCHING.remove(emoji);
+			CACHE.put(emoji, Optional.empty());
 		}
 
 		private static String googleEmojiFilename(String emoji) {
@@ -622,7 +612,7 @@ public final class PreviewCardStore {
 	}
 
 	private static boolean sameId(Long first, Long second) {
-		return first == null ? second == null : first.equals(second);
+		return Objects.equals(first, second);
 	}
 
 	private static int runStart(List<GuiMessage.Line> lines, int lineIndex, Long runId) {
@@ -643,18 +633,215 @@ public final class PreviewCardStore {
 		return index;
 	}
 
-	private PreviewImage createImage(long cardId, byte[] imageBytes) {
+	static Optional<PreparedPreviewImage> decodeImage(byte[] imageBytes) {
 		try {
-			NativeImage nativeImage = readImage(imageBytes);
-			Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "preview/" + cardId);
-			DynamicTexture texture = new DynamicTexture(() -> "LinkPreview thumbnail", nativeImage);
-			Minecraft.getInstance().getTextureManager().register(id, texture);
-			LinkPreviewClient.LOGGER.info("Loaded LinkPreview image {}x{} for card {}", nativeImage.getWidth(), nativeImage.getHeight(), cardId);
-			return new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight());
+			if (isGif(imageBytes)) {
+				try {
+					Optional<GifAnimation> animation = readGifAnimation(imageBytes);
+					if (animation.isPresent() && animation.get().frames().size() > 1) {
+						return Optional.of(PreparedPreviewImage.animated(animation.get().width(), animation.get().height(), animation.get().frames(), animation.get().frameDelaysMillis()));
+					}
+
+					animation.ifPresent(GifAnimation::close);
+				} catch (IOException | RuntimeException exception) {
+					LinkPreviewClient.LOGGER.debug("Failed to decode animated GIF, falling back to static image", exception);
+				}
+			}
+
+			return Optional.of(PreparedPreviewImage.staticImage(readImage(imageBytes)));
 		} catch (IOException exception) {
 			LinkPreviewClient.LOGGER.warn("Failed to decode LinkPreview image. Worker may be returning an unsupported image format.", exception);
+			return Optional.empty();
+		}
+	}
+
+	private PreviewImage createImage(long cardId, PreparedPreviewImage preparedImage) {
+		Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "preview/" + cardId);
+		if (preparedImage.animated()) {
+			NativeImage texturePixels = copyNative(preparedImage.frames().getFirst());
+			DynamicTexture texture = new DynamicTexture(() -> "LinkPreview animated thumbnail", texturePixels);
+			Minecraft.getInstance().getTextureManager().register(id, texture);
+			LinkPreviewClient.LOGGER.info("Loaded animated LinkPreview GIF {}x{} with {} frames for card {}", preparedImage.width(), preparedImage.height(), preparedImage.frames().size(), cardId);
+			return new PreviewImage(id, preparedImage.width(), preparedImage.height(), texture, preparedImage.frames(), preparedImage.frameDelaysMillis());
+		}
+
+		NativeImage nativeImage = preparedImage.staticPixels();
+		DynamicTexture texture = new DynamicTexture(() -> "LinkPreview thumbnail", nativeImage);
+		Minecraft.getInstance().getTextureManager().register(id, texture);
+		LinkPreviewClient.LOGGER.info("Loaded LinkPreview image {}x{} for card {}", nativeImage.getWidth(), nativeImage.getHeight(), cardId);
+		return new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight());
+	}
+
+	private static boolean isGif(byte[] imageBytes) {
+		return imageBytes.length >= 6
+				&& imageBytes[0] == 'G'
+				&& imageBytes[1] == 'I'
+				&& imageBytes[2] == 'F'
+				&& imageBytes[3] == '8'
+				&& (imageBytes[4] == '7' || imageBytes[4] == '9')
+				&& imageBytes[5] == 'a';
+	}
+
+	private static Optional<GifAnimation> readGifAnimation(byte[] imageBytes) throws IOException {
+		java.util.Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName("gif");
+		ImageReader reader = readers.hasNext() ? readers.next() : null;
+		if (reader == null) {
+			return Optional.empty();
+		}
+
+		List<NativeImage> frames = new ArrayList<>();
+		List<Integer> delays = new ArrayList<>();
+		try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(imageBytes))) {
+			if (input == null) {
+				return Optional.empty();
+			}
+
+			reader.setInput(input, false, false);
+			int[] screenSize = gifScreenSize(reader);
+			int canvasWidth = screenSize[0] > 0 ? screenSize[0] : reader.getWidth(0);
+			int canvasHeight = screenSize[1] > 0 ? screenSize[1] : reader.getHeight(0);
+			BufferedImage canvas = new BufferedImage(canvasWidth, canvasHeight, BufferedImage.TYPE_INT_ARGB);
+
+			for (int index = 0; index < MAX_GIF_FRAMES; index++) {
+				BufferedImage frame;
+				GifFrameMetadata metadata;
+				try {
+					frame = reader.read(index);
+					metadata = gifFrameMetadata(reader.getImageMetadata(index));
+				} catch (IndexOutOfBoundsException exception) {
+					break;
+				}
+
+				BufferedImage beforeFrame = "restoreToPrevious".equals(metadata.disposalMethod()) ? copyBuffered(canvas) : null;
+				Graphics2D graphics = canvas.createGraphics();
+				try {
+					graphics.drawImage(frame, metadata.left(), metadata.top(), null);
+				} finally {
+					graphics.dispose();
+				}
+
+				frames.add(bufferedToNative(canvas));
+				delays.add(metadata.delayMillis());
+				applyGifDisposal(canvas, beforeFrame, metadata, frame.getWidth(), frame.getHeight());
+			}
+
+			if (frames.isEmpty()) {
+				return Optional.empty();
+			}
+
+			int[] frameDelays = new int[delays.size()];
+			for (int index = 0; index < delays.size(); index++) {
+				frameDelays[index] = delays.get(index);
+			}
+
+			return Optional.of(new GifAnimation(canvasWidth, canvasHeight, frames, frameDelays));
+		} catch (IOException | RuntimeException exception) {
+			for (NativeImage frame : frames) {
+				frame.close();
+			}
+			throw exception;
+		} finally {
+			reader.dispose();
+		}
+	}
+
+	private static int[] gifScreenSize(ImageReader reader) {
+		try {
+			Node root = reader.getStreamMetadata().getAsTree("javax_imageio_gif_stream_1.0");
+			Node descriptor = firstChild(root, "LogicalScreenDescriptor");
+			if (descriptor != null) {
+				return new int[] {
+						intAttribute(descriptor, "logicalScreenWidth", 0),
+						intAttribute(descriptor, "logicalScreenHeight", 0)
+				};
+			}
+		} catch (IOException | RuntimeException exception) {
+			return new int[] { 0, 0 };
+		}
+
+		return new int[] { 0, 0 };
+	}
+
+	private static GifFrameMetadata gifFrameMetadata(IIOMetadata metadata) {
+		Node root = metadata.getAsTree("javax_imageio_gif_image_1.0");
+		Node descriptor = firstChild(root, "ImageDescriptor");
+		Node control = firstChild(root, "GraphicControlExtension");
+		int left = descriptor == null ? 0 : intAttribute(descriptor, "imageLeftPosition", 0);
+		int top = descriptor == null ? 0 : intAttribute(descriptor, "imageTopPosition", 0);
+		int delay = control == null ? DEFAULT_GIF_FRAME_DELAY_MILLIS : intAttribute(control, "delayTime", DEFAULT_GIF_FRAME_DELAY_MILLIS / 10) * 10;
+		String disposal = control == null ? "none" : disposalMethod(control);
+
+		return new GifFrameMetadata(left, top, Math.max(MIN_GIF_FRAME_DELAY_MILLIS, delay), disposal);
+	}
+
+	private static Node firstChild(Node node, String name) {
+		if (node == null) {
 			return null;
 		}
+
+		NodeList children = node.getChildNodes();
+		for (int index = 0; index < children.getLength(); index++) {
+			Node child = children.item(index);
+			if (name.equals(child.getNodeName())) {
+				return child;
+			}
+		}
+
+		return null;
+	}
+
+	private static int intAttribute(Node node, String name, int fallback) {
+		Node attribute = node.getAttributes().getNamedItem(name);
+		if (attribute == null) {
+			return fallback;
+		}
+
+		try {
+			return Integer.parseInt(attribute.getNodeValue());
+		} catch (NumberFormatException exception) {
+			return fallback;
+		}
+	}
+
+	private static String disposalMethod(Node node) {
+		Node attribute = node.getAttributes().getNamedItem("disposalMethod");
+		return attribute == null ? "none" : attribute.getNodeValue();
+	}
+
+	private static void applyGifDisposal(BufferedImage canvas, BufferedImage beforeFrame, GifFrameMetadata metadata, int frameWidth, int frameHeight) {
+		if ("restoreToPrevious".equals(metadata.disposalMethod()) && beforeFrame != null) {
+			Graphics2D graphics = canvas.createGraphics();
+			try {
+				graphics.setComposite(AlphaComposite.Src);
+				graphics.drawImage(beforeFrame, 0, 0, null);
+			} finally {
+				graphics.dispose();
+			}
+			return;
+		}
+
+		if ("restoreToBackgroundColor".equals(metadata.disposalMethod())) {
+			Graphics2D graphics = canvas.createGraphics();
+			try {
+				graphics.setComposite(AlphaComposite.Clear);
+				graphics.fillRect(metadata.left(), metadata.top(), frameWidth, frameHeight);
+			} finally {
+				graphics.dispose();
+			}
+		}
+	}
+
+	private static BufferedImage copyBuffered(BufferedImage source) {
+		BufferedImage copy = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = copy.createGraphics();
+		try {
+			graphics.setComposite(AlphaComposite.Src);
+			graphics.drawImage(source, 0, 0, null);
+		} finally {
+			graphics.dispose();
+		}
+
+		return copy;
 	}
 
 	private static NativeImage readImage(byte[] imageBytes) throws IOException {
@@ -666,20 +853,65 @@ public final class PreviewCardStore {
 				throw nativeImageException;
 			}
 
-			NativeImage nativeImage = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), false);
-			for (int y = 0; y < bufferedImage.getHeight(); y++) {
-				for (int x = 0; x < bufferedImage.getWidth(); x++) {
-					nativeImage.setPixel(x, y, bufferedImage.getRGB(x, y));
-				}
-			}
-
-			return nativeImage;
+			return bufferedToNative(bufferedImage);
 		}
+	}
+
+	private static NativeImage copyNative(NativeImage source) {
+		NativeImage copy = new NativeImage(source.getWidth(), source.getHeight(), false);
+		copy.copyFrom(source);
+		return copy;
+	}
+
+	private static NativeImage bufferedToNative(BufferedImage bufferedImage) {
+		NativeImage nativeImage = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), false);
+		for (int y = 0; y < bufferedImage.getHeight(); y++) {
+			for (int x = 0; x < bufferedImage.getWidth(); x++) {
+				nativeImage.setPixel(x, y, bufferedImage.getRGB(x, y));
+			}
+		}
+
+		return nativeImage;
+	}
+
+	record PreparedPreviewImage(NativeImage staticPixels, int width, int height, List<NativeImage> frames, int[] frameDelaysMillis) {
+		static PreparedPreviewImage staticImage(NativeImage pixels) {
+			return new PreparedPreviewImage(pixels, pixels.getWidth(), pixels.getHeight(), List.of(), new int[0]);
+		}
+
+		static PreparedPreviewImage animated(int width, int height, List<NativeImage> frames, int[] frameDelaysMillis) {
+			return new PreparedPreviewImage(null, width, height, frames, frameDelaysMillis);
+		}
+
+		boolean animated() {
+			return frames.size() > 1;
+		}
+
+		void close() {
+			if (staticPixels != null) {
+				staticPixels.close();
+			}
+			for (NativeImage frame : frames) {
+				frame.close();
+			}
+		}
+	}
+
+	private record GifAnimation(int width, int height, List<NativeImage> frames, int[] frameDelaysMillis) {
+		void close() {
+			for (NativeImage frame : frames) {
+				frame.close();
+			}
+		}
+	}
+
+	private record GifFrameMetadata(int left, int top, int delayMillis, String disposalMethod) {
 	}
 
 	private static void release(PreviewCard card) {
 		if (card.image() != null) {
 			Minecraft.getInstance().getTextureManager().release(card.image().textureId());
+			card.image().close();
 		}
 	}
 
@@ -718,7 +950,7 @@ public final class PreviewCardStore {
 			return;
 		}
 
-		int width = Math.min(font.width(text), Math.max(0, textRight - x));
+		int width = Math.clamp(font.width(text), 0, Math.max(0, textRight - x));
 		if (hover.localX() >= x && hover.localX() < x + width && hover.localY() >= y && hover.localY() < y + font.lineHeight) {
 			graphics.setTooltipForNextFrame(font, Component.literal(text), hover.mouseGuiX(), hover.mouseGuiY());
 		}

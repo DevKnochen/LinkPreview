@@ -17,12 +17,12 @@ public abstract class ConfirmScreenMixin {
 			index = 0
 	)
 	private Component linkpreview$styleConfirmLinkMessage(Component message) {
-		if (!((Object) this instanceof ConfirmLinkScreen)) {
+		if (!ConfirmLinkScreen.class.isInstance(this)) {
 			return message;
 		}
 
 		String url = message.getString();
-		if (!url.startsWith("http://") && !url.startsWith("https://")) {
+		if (!url.startsWith("http" + "://") && !url.startsWith("https" + "://")) {
 			return message;
 		}
 

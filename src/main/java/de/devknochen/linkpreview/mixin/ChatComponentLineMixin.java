@@ -16,11 +16,11 @@ public abstract class ChatComponentLineMixin {
 			method = "accept(Lnet/minecraft/client/multiplayer/chat/GuiMessage$Line;IF)V",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/components/ChatComponent$ChatGraphicsAccess;handleMessage(IFLnet/minecraft/util/FormattedCharSequence;)Z")
 	)
-	private boolean linkpreview$keepPreviewSourceTextBright(ChatComponent.ChatGraphicsAccess graphics, int y, float alpha, FormattedCharSequence message, GuiMessage.Line line, int lineIndex, float lineAlpha) {
+	private boolean linkpreview$keepPreviewSourceTextBright(ChatComponent.ChatGraphicsAccess graphics, int y, float textAlpha, FormattedCharSequence message, GuiMessage.Line line, int lineIndex, float alpha) {
 		if (PreviewCardStore.isSpacerLine(line)) {
 			return false;
 		}
 
-		return graphics.handleMessage(y, alpha, message);
+		return graphics.handleMessage(y, textAlpha, message);
 	}
 }
