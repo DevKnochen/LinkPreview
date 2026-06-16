@@ -12,8 +12,6 @@
 
 *Titles. Thumbnails. Descriptions. Right there in your chat.*
 
- **⚠️ Project is in Beta! Expect some bugs. ⚠️**
-
 </div>
 
 ---
