@@ -4,11 +4,11 @@ import java.net.URI;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Style;
-import net.minecraft.text.Text;
-import net.minecraft.text.TextColor;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 
 public final class LinkifiedText {
 	private static final Pattern URL_PATTERN = Pattern.compile("\\bhttps?://[^\\s<>()\"']+");
@@ -17,8 +17,8 @@ public final class LinkifiedText {
 	private LinkifiedText() {
 	}
 
-	public static Text from(String text) {
-		MutableText result = Text.empty();
+	public static Component from(String text) {
+		MutableComponent result = Component.empty();
 		Matcher matcher = URL_PATTERN.matcher(text);
 		int position = 0;
 
@@ -27,15 +27,15 @@ public final class LinkifiedText {
 			String url = trimTrailingPunctuation(rawUrl);
 
 			if (matcher.start() > position) {
-				result.append(Text.literal(text.substring(position, matcher.start())));
+				result.append(Component.literal(text.substring(position, matcher.start())));
 			}
 
-			result.append(Text.literal(displayUrl(url)).setStyle(urlStyle(url)));
+			result.append(Component.literal(displayUrl(url)).withStyle(urlStyle(url)));
 			position = matcher.start() + url.length();
 		}
 
 		if (position < text.length()) {
-			result.append(Text.literal(text.substring(position)));
+			result.append(Component.literal(text.substring(position)));
 		}
 
 		return result;
@@ -44,11 +44,11 @@ public final class LinkifiedText {
 	private static Style urlStyle(String url) {
 		Style style = Style.EMPTY
 				.withColor(TextColor.fromRgb(0x2F81F7))
-				.withUnderline(true);
+				.withoutShadow()
+				.withUnderlined(true);
 
 		try {
-			URI uri = URI.create(url);
-			return style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, uri.toString()));
+			return style.withClickEvent(new ClickEvent.OpenUrl(URI.create(url)));
 		} catch (IllegalArgumentException exception) {
 			return style;
 		}

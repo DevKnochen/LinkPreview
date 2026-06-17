@@ -78,7 +78,8 @@ public final class PreviewCardStore {
 	}
 
 	public static Component spacerComponent(long previewId) {
-		return Component.literal(SPACER_MARKER_PREFIX + previewId + "]");
+		String marker = spacerMarker(previewId);
+		return Component.literal(" ").withStyle(style -> style.withInsertion(marker));
 	}
 
 	public synchronized void reserve(long id, String site) {
@@ -109,8 +110,8 @@ public final class PreviewCardStore {
 		Minecraft minecraft = Minecraft.getInstance();
 		ChatComponentAccessor accessor = (ChatComponentAccessor) minecraft.gui.hud.getChat();
 		String marker = spacerMarker(cardId);
-		accessor.linkpreview$trimmedMessages().removeIf(line -> marker.equals(line.parent().content().getString()));
-		accessor.linkpreview$allMessages().removeIf(message -> marker.equals(message.content().getString()));
+		accessor.linkpreview$trimmedMessages().removeIf(line -> marker.equals(spacerMarker(line.parent().content())));
+		accessor.linkpreview$allMessages().removeIf(message -> marker.equals(spacerMarker(message.content())));
 	}
 
 	synchronized void attachImage(long cardId, PreparedPreviewImage preparedImage) {
@@ -573,7 +574,7 @@ public final class PreviewCardStore {
 	}
 
 	public static boolean isSpacerLine(GuiMessage.Line line) {
-		return line.parent().content().getString().startsWith(SPACER_MARKER_PREFIX);
+		return spacerMarker(line.parent().content()) != null;
 	}
 
 	public static boolean isPreviewSourceLine(GuiMessage.Line line) {
@@ -588,14 +589,28 @@ public final class PreviewCardStore {
 		return SPACER_MARKER_PREFIX + previewId + "]";
 	}
 
+	private static String spacerMarker(Component component) {
+		String insertion = component.getStyle().getInsertion();
+		if (insertion != null && insertion.startsWith(SPACER_MARKER_PREFIX) && insertion.endsWith("]")) {
+			return insertion;
+		}
+
+		String text = component.getString();
+		if (text.startsWith(SPACER_MARKER_PREFIX) && text.endsWith("]")) {
+			return text;
+		}
+
+		return null;
+	}
+
 	private static Long spacerId(GuiMessage.Line line) {
-		String text = line.parent().content().getString();
-		if (!text.startsWith(SPACER_MARKER_PREFIX) || !text.endsWith("]")) {
+		String marker = spacerMarker(line.parent().content());
+		if (marker == null) {
 			return null;
 		}
 
 		try {
-			return Long.parseLong(text.substring(SPACER_MARKER_PREFIX.length(), text.length() - 1));
+			return Long.parseLong(marker.substring(SPACER_MARKER_PREFIX.length(), marker.length() - 1));
 		} catch (NumberFormatException exception) {
 			return null;
 		}

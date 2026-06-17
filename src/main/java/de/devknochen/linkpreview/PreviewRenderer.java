@@ -2,7 +2,7 @@ package de.devknochen.linkpreview;
 
 import java.net.URI;
 
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 public final class PreviewRenderer {
 	private static final int MAX_TITLE_LENGTH = 120;
@@ -26,15 +26,15 @@ public final class PreviewRenderer {
 	}
 
 	public void complete(long previewId, String sourceUrl, PreviewResponse preview) {
-		MinecraftClient minecraft = MinecraftClient.getInstance();
+		Minecraft minecraft = Minecraft.getInstance();
 		minecraft.execute(() -> completeOnClientThread(minecraft, previewId, sourceUrl, preview));
 	}
 
 	public void discard(long previewId) {
-		MinecraftClient.getInstance().execute(() -> cardStore.discard(previewId));
+		Minecraft.getInstance().execute(() -> cardStore.discard(previewId));
 	}
 
-	private void completeOnClientThread(MinecraftClient minecraft, long previewId, String sourceUrl, PreviewResponse preview) {
+	private void completeOnClientThread(Minecraft minecraft, long previewId, String sourceUrl, PreviewResponse preview) {
 		if (preview.isEmpty()) {
 			cardStore.discard(previewId);
 			return;
