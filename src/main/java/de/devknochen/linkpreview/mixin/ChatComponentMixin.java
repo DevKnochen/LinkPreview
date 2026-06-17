@@ -106,9 +106,9 @@ public abstract class ChatComponentMixin {
 		float scale = (float) getChatScale();
 		int maxWidth = MathHelper.ceil(getWidth() / scale);
 		int scaledHeight = context.getScaledWindowHeight();
-		context.getMatrices().push();
-		context.getMatrices().scale(scale, scale, 1.0F);
-		context.getMatrices().translate(4.0F, 0.0F, 0.0F);
+		context.getMatrices().pushMatrix();
+		context.getMatrices().scale(scale, scale);
+		context.getMatrices().translate(4.0F, 0.0F);
 		int chatBottom = MathHelper.floor((scaledHeight - 40) / scale);
 		int hoveredMessageIndex = getMessageIndex(toChatLineX(mouseX), toChatLineY(mouseY));
 		double textOpacity = client.options.getChatOpacity().getValue() * 0.9F + 0.1F;
@@ -140,8 +140,7 @@ public abstract class ChatComponentMixin {
 
 			int entryBottom = chatBottom - visibleIndex * lineHeight;
 			int textY = entryBottom + textYInset;
-			context.getMatrices().push();
-			context.getMatrices().translate(0.0F, 0.0F, 50.0F);
+			context.getMatrices().pushMatrix();
 			if (PreviewCardStore.isPreviewSourceLine(visible)) {
 				context.fill(-4, entryBottom - lineHeight, maxWidth + 8, entryBottom, backgroundAlpha << 24);
 				context.fill(-4, entryBottom - lineHeight, -1, entryBottom, linkpreview$accentWithAlpha((float) opacityMultiplier));
@@ -160,21 +159,19 @@ public abstract class ChatComponentMixin {
 				}
 			}
 
-			context.getMatrices().translate(0.0F, 0.0F, 50.0F);
 			context.drawTextWithShadow(client.textRenderer, visible.content(), 0, textY, 0xFFFFFF + (textAlpha << 24));
-			context.getMatrices().pop();
+			context.getMatrices().popMatrix();
 		}
 
 		long queuedMessages = client.getMessageHandler().getUnprocessedMessageCount();
 		if (queuedMessages > 0L) {
 			int queueTextAlpha = (int) (128.0 * textOpacity);
 			int queueBackgroundAlpha = (int) (255.0 * backgroundOpacity);
-			context.getMatrices().push();
-			context.getMatrices().translate(0.0F, (float) chatBottom, 50.0F);
+			context.getMatrices().pushMatrix();
+			context.getMatrices().translate(0.0F, (float) chatBottom);
 			context.fill(-2, 0, maxWidth + 4, 9, queueBackgroundAlpha << 24);
-			context.getMatrices().translate(0.0F, 0.0F, 50.0F);
 			context.drawTextWithShadow(client.textRenderer, Text.translatable("chat.queue", queuedMessages), 0, 1, 0xFFFFFF + (queueTextAlpha << 24));
-			context.getMatrices().pop();
+			context.getMatrices().popMatrix();
 		}
 
 		if (chatFocused) {
@@ -191,7 +188,7 @@ public abstract class ChatComponentMixin {
 			}
 		}
 
-		context.getMatrices().pop();
+		context.getMatrices().popMatrix();
 	}
 
 	@Unique

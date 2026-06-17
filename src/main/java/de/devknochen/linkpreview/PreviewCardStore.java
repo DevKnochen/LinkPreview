@@ -33,7 +33,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.gui.hud.ChatHudLine;
 import net.minecraft.client.gui.screen.ChatScreen;
-import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.util.Window;
@@ -158,9 +158,9 @@ public final class PreviewCardStore {
 		boolean chatFocused = minecraft.currentScreen instanceof ChatScreen;
 		HoverState hover = chatFocused ? hoverState(minecraft, graphics, scale) : null;
 
-		graphics.getMatrices().push();
-		graphics.getMatrices().scale((float) scale, (float) scale, 1.0F);
-		graphics.getMatrices().translate(4.0F, 0.0F, 0.0F);
+		graphics.getMatrices().pushMatrix();
+		graphics.getMatrices().scale((float) scale, (float) scale);
+		graphics.getMatrices().translate(4.0F, 0.0F);
 
 		try {
 			graphics.enableScissor(0, scissorTop, graphics.getScaledWindowWidth(), scissorBottom);
@@ -170,7 +170,7 @@ public final class PreviewCardStore {
 				graphics.disableScissor();
 			}
 		} finally {
-			graphics.getMatrices().pop();
+			graphics.getMatrices().popMatrix();
 		}
 	}
 
@@ -258,7 +258,7 @@ public final class PreviewCardStore {
 			int targetY = imageY + (THUMBNAIL_HEIGHT - targetHeight) / 2;
 
 			graphics.drawTexture(
-					RenderLayer::getGuiTextured,
+					RenderPipelines.GUI_TEXTURED,
 					card.image().textureId(),
 					targetX,
 					targetY,
@@ -335,7 +335,7 @@ public final class PreviewCardStore {
 
 	private static void drawTexture(DrawContext graphics, Identifier textureId, int x, int y, int width, int height, int regionWidth, int regionHeight, int textureWidth, int textureHeight, int color) {
 		graphics.drawTexture(
-				RenderLayer::getGuiTextured,
+				RenderPipelines.GUI_TEXTURED,
 				textureId,
 				x,
 				y,
