@@ -2,16 +2,15 @@ package de.devknochen.linkpreview;
 
 import java.util.List;
 
-import com.mojang.blaze3d.platform.NativeImage;
-
-import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.resources.Identifier;
+import net.minecraft.client.texture.NativeImage;
+import net.minecraft.client.texture.NativeImageBackedTexture;
+import net.minecraft.util.Identifier;
 
 final class PreviewImage {
 	private final Identifier textureId;
 	private final int width;
 	private final int height;
-	private final DynamicTexture texture;
+	private final NativeImageBackedTexture texture;
 	private final List<NativeImage> frames;
 	private final int[] frameDelaysMillis;
 	private int frameIndex;
@@ -21,7 +20,7 @@ final class PreviewImage {
 		this(textureId, width, height, null, List.of(), new int[0]);
 	}
 
-	PreviewImage(Identifier textureId, int width, int height, DynamicTexture texture, List<NativeImage> frames, int[] frameDelaysMillis) {
+	PreviewImage(Identifier textureId, int width, int height, NativeImageBackedTexture texture, List<NativeImage> frames, int[] frameDelaysMillis) {
 		this.textureId = textureId;
 		this.width = width;
 		this.height = height;
@@ -55,7 +54,10 @@ final class PreviewImage {
 		int advanced = 0;
 		while (nowMillis >= nextFrameAtMillis && advanced < frames.size()) {
 			frameIndex = (frameIndex + 1) % frames.size();
-			NativeImage pixels = texture.getPixels();
+			NativeImage pixels = texture.getImage();
+			if (pixels == null) {
+				return;
+			}
 			pixels.copyFrom(frames.get(frameIndex));
 			texture.upload();
 			nextFrameAtMillis += frameDelay(frameIndex);

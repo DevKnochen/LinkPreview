@@ -1,9 +1,9 @@
 package de.devknochen.linkpreview.mixin;
 
-import net.minecraft.client.gui.screens.ConfirmLinkScreen;
-import net.minecraft.client.gui.screens.ConfirmScreen;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.TextColor;
+import net.minecraft.client.gui.screen.ConfirmScreen;
+import net.minecraft.text.StringVisitable;
+import net.minecraft.text.Text;
+import net.minecraft.text.TextColor;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -13,11 +13,11 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 public abstract class ConfirmScreenMixin {
 	@ModifyArg(
 			method = "init",
-			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/components/MultiLineTextWidget;<init>(Lnet/minecraft/network/chat/Component;Lnet/minecraft/client/gui/Font;)V"),
-			index = 0
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/font/MultilineText;create(Lnet/minecraft/client/font/TextRenderer;Lnet/minecraft/text/StringVisitable;I)Lnet/minecraft/client/font/MultilineText;"),
+			index = 1
 	)
-	private Component linkpreview$styleConfirmLinkMessage(Component message) {
-		if (!ConfirmLinkScreen.class.isInstance(this)) {
+	private StringVisitable linkpreview$styleConfirmLinkMessage(StringVisitable message) {
+		if (!"net.minecraft.client.gui.screen.ConfirmLinkScreen".equals(((Object) this).getClass().getName())) {
 			return message;
 		}
 
@@ -26,7 +26,7 @@ public abstract class ConfirmScreenMixin {
 			return message;
 		}
 
-		return Component.literal(url)
-				.withStyle(style -> style.withColor(TextColor.fromRgb(0x2F81F7)).withUnderlined(true));
+		return Text.literal(url)
+				.styled(style -> style.withColor(TextColor.fromRgb(0x2F81F7)).withUnderline(true));
 	}
 }

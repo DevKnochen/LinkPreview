@@ -19,7 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.systems.RenderSystem;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -29,20 +29,26 @@ import javax.imageio.stream.ImageInputStream;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.ChatComponent;
-import net.minecraft.client.multiplayer.chat.GuiMessage;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.texture.DynamicTexture;
-import com.mojang.blaze3d.platform.Window;
-import net.minecraft.util.ARGB;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
-
-import de.devknochen.linkpreview.mixin.ChatComponentAccessor;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.hud.ChatHud;
+import net.minecraft.client.gui.hud.ChatHudLine;
+import net.minecraft.client.gui.screen.ChatScreen;
+import net.minecraft.client.render.BufferBuilder;
+import net.minecraft.client.render.BufferRenderer;
+import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormats;
+import net.minecraft.client.texture.NativeImage;
+import net.minecraft.client.texture.NativeImageBackedTexture;
+import net.minecraft.client.util.Window;
+import net.minecraft.text.OrderedText;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.MathHelper;
+import org.joml.Matrix4f;
 
 public final class PreviewCardStore {
 	public static final String SPACER_MARKER_PREFIX = "[linkpreview-spacer:";
@@ -77,16 +83,16 @@ public final class PreviewCardStore {
 		return hasImage ? IMAGE_SPACER_LINES : TEXT_SPACER_LINES;
 	}
 
-	public static Component spacerComponent(long previewId) {
-		return Component.literal(SPACER_MARKER_PREFIX + previewId + "]");
+	public static Text spacerComponent(long previewId) {
+		return Text.literal(SPACER_MARKER_PREFIX + previewId + "]");
 	}
 
 	public synchronized void reserve(long id, String site) {
 		PreviewCard card = new PreviewCard(id, site, "Loading preview", List.of(), true);
-		cards.addFirst(card);
+		cards.add(0, card);
 
 		while (cards.size() > MAX_STORED_CARDS) {
-			release(cards.removeLast());
+			release(cards.remove(cards.size() - 1));
 		}
 	}
 
@@ -106,11 +112,11 @@ public final class PreviewCardStore {
 			}
 		}
 
-		Minecraft minecraft = Minecraft.getInstance();
-		ChatComponentAccessor accessor = (ChatComponentAccessor) minecraft.gui.getChat();
+		MinecraftClient minecraft = MinecraftClient.getInstance();
+		LinkPreviewChatAccess accessor = (LinkPreviewChatAccess) minecraft.inGameHud.getChatHud();
 		String marker = spacerMarker(cardId);
-		accessor.linkpreview$trimmedMessages().removeIf(line -> marker.equals(line.parent().content().getString()));
-		accessor.linkpreview$allMessages().removeIf(message -> marker.equals(message.content().getString()));
+		accessor.linkpreview$visibleMessages().removeIf(line -> marker.equals(visibleText(line)));
+		accessor.linkpreview$messages().removeIf(message -> marker.equals(message.content().getString()));
 	}
 
 	synchronized void attachImage(long cardId, PreparedPreviewImage preparedImage) {
@@ -133,49 +139,51 @@ public final class PreviewCardStore {
 		}
 	}
 
-	public synchronized void render(GuiGraphicsExtractor graphics, @SuppressWarnings("unused") DeltaTracker deltaTracker) {
-		Minecraft minecraft = Minecraft.getInstance();
+	public synchronized void render(DrawContext graphics) {
+		MinecraftClient minecraft = MinecraftClient.getInstance();
 		if (cards.isEmpty()) {
 			return;
 		}
 
-		int now = minecraft.gui.getGuiTicks();
-		Font font = minecraft.font;
-		ChatComponent chat = minecraft.gui.getChat();
-		ChatComponentAccessor accessor = (ChatComponentAccessor) chat;
-		List<GuiMessage.Line> lines = accessor.linkpreview$trimmedMessages();
-		int scroll = accessor.linkpreview$chatScrollbarPos();
-		int visibleLines = Math.clamp(lines.size() - scroll, 0, chat.getLinesPerPage());
+		int now = minecraft.inGameHud.getTicks();
+		TextRenderer font = minecraft.textRenderer;
+		ChatHud chat = minecraft.inGameHud.getChatHud();
+		LinkPreviewChatAccess accessor = (LinkPreviewChatAccess) chat;
+		List<ChatHudLine.Visible> lines = accessor.linkpreview$visibleMessages();
+		int scroll = accessor.linkpreview$scrolledLines();
+		int visibleLines = MathHelper.clamp(lines.size() - scroll, 0, chat.getVisibleLineCount());
 		if (visibleLines <= 0) {
 			return;
 		}
 
-		double scale = minecraft.options.chatScale().get();
-		double spacing = minecraft.options.chatLineSpacing().get();
+		double scale = minecraft.options.getChatScale().getValue();
+		double spacing = minecraft.options.getChatLineSpacing().getValue();
 		int lineHeight = (int) (9.0D * (spacing + 1.0D));
-		int chatBottom = (int) Math.floor((graphics.guiHeight() - 40) / scale);
-		int chatWidth = Math.max(MIN_CARD_WIDTH, (int) Math.ceil(ChatComponent.getWidth(minecraft.options.chatWidth().get()) / scale) + 12);
+		int chatBottom = (int) Math.floor((graphics.getScaledWindowHeight() - 40) / scale);
+		int chatWidth = Math.max(MIN_CARD_WIDTH, (int) Math.ceil(ChatHud.getWidth(minecraft.options.getChatWidth().getValue()) / scale) + 12);
 		int clipTop = chatBottom - visibleLines * lineHeight;
-		boolean chatFocused = chat.isChatFocused();
+		int scissorTop = MathHelper.clamp((int) Math.floor(clipTop * scale), 0, graphics.getScaledWindowHeight());
+		int scissorBottom = MathHelper.clamp((int) Math.ceil(chatBottom * scale), 0, graphics.getScaledWindowHeight());
+		boolean chatFocused = minecraft.currentScreen instanceof ChatScreen;
 		HoverState hover = chatFocused ? hoverState(minecraft, graphics, scale) : null;
 
-		graphics.pose().pushMatrix();
-		graphics.pose().scale((float) scale, (float) scale);
-		graphics.pose().translate(4.0F, 0.0F);
+		graphics.getMatrices().push();
+		graphics.getMatrices().scale((float) scale, (float) scale, 1.0F);
+		graphics.getMatrices().translate(4.0F, 0.0F, 0.0F);
 
 		try {
-			graphics.enableScissor(CARD_X, clipTop, CARD_X + chatWidth, chatBottom);
+			graphics.enableScissor(0, scissorTop, graphics.getScaledWindowWidth(), scissorBottom);
 			try {
 				drawVisibleCards(graphics, font, lines, scroll, visibleLines, lineHeight, chatBottom, now, chatFocused, chatWidth, hover);
 			} finally {
 				graphics.disableScissor();
 			}
 		} finally {
-			graphics.pose().popMatrix();
+			graphics.getMatrices().pop();
 		}
 	}
 
-	private void drawVisibleCards(GuiGraphicsExtractor graphics, Font font, List<GuiMessage.Line> lines, int scroll, int visibleLines, int lineHeight, int chatBottom, int now, boolean chatFocused, int cardWidth, HoverState hover) {
+	private void drawVisibleCards(DrawContext graphics, TextRenderer font, List<ChatHudLine.Visible> lines, int scroll, int visibleLines, int lineHeight, int chatBottom, int now, boolean chatFocused, int cardWidth, HoverState hover) {
 		int visibleIndex = 0;
 
 		while (visibleIndex < visibleLines) {
@@ -196,7 +204,8 @@ public final class PreviewCardStore {
 				if (card != null) {
 					int reservedTop = chatBottom - (runStart - scroll + runLength) * lineHeight;
 					float alpha = chatFocused ? 1.0F : lineAlpha(now, lines.get(Math.max(runStart, scroll)));
-					if (alpha > 1.0E-5F) {
+					float textOpacity = MinecraftClient.getInstance().options.getChatOpacity().getValue().floatValue() * 0.9F + 0.1F;
+					if ((int) (255.0F * alpha * textOpacity) > 3) {
 						drawCard(graphics, font, card, reservedTop, cardWidth, Math.min(cardHeight(card), runLength * lineHeight), alpha, hover);
 					}
 				}
@@ -204,15 +213,15 @@ public final class PreviewCardStore {
 		}
 	}
 
-	private void drawCard(GuiGraphicsExtractor graphics, Font font, PreviewCard card, int y, int width, int height, float alpha, HoverState hover) {
+	private void drawCard(DrawContext graphics, TextRenderer font, PreviewCard card, int y, int width, int height, float alpha, HoverState hover) {
 		int imageX = CARD_X + width - THUMBNAIL_RIGHT_INSET - THUMBNAIL_WIDTH;
 		int textRight = CARD_X + width - CARD_PADDING;
 		if (card.imageExpected()) {
 			textRight = imageX - CARD_PADDING;
 		}
-		float backgroundOpacity = Minecraft.getInstance().options.textBackgroundOpacity().get().floatValue();
-		float textOpacity = Minecraft.getInstance().options.chatOpacity().get().floatValue() * 0.9F + 0.1F;
-		graphics.fill(CARD_X, y, CARD_X + width, y + height, ARGB.black(alpha * backgroundOpacity));
+		float backgroundOpacity = MinecraftClient.getInstance().options.getTextBackgroundOpacity().getValue().floatValue();
+		float textOpacity = MinecraftClient.getInstance().options.getChatOpacity().getValue().floatValue() * 0.9F + 0.1F;
+		graphics.fill(CARD_X, y, CARD_X + width, y + height, MathHelper.clamp(Math.round(255.0F * alpha * backgroundOpacity), 0, 255) << 24);
 		graphics.fill(CARD_X, y, CARD_X + 3, y + height, withAlpha(ACCENT, alpha * textOpacity));
 
 		int textX = CARD_X + CARD_PADDING + 5;
@@ -240,7 +249,7 @@ public final class PreviewCardStore {
 		return Math.max(textHeight, imageHeight);
 	}
 
-	private void drawThumbnail(GuiGraphicsExtractor graphics, Font font, PreviewCard card, int imageX, int imageY, float alpha, float textOpacity) {
+	private void drawThumbnail(DrawContext graphics, TextRenderer font, PreviewCard card, int imageX, int imageY, float alpha, float textOpacity) {
 		if (!card.imageExpected()) {
 			return;
 		}
@@ -257,13 +266,11 @@ public final class PreviewCardStore {
 			int targetX = imageX + (THUMBNAIL_WIDTH - targetWidth) / 2;
 			int targetY = imageY + (THUMBNAIL_HEIGHT - targetHeight) / 2;
 
-			graphics.blit(
-					RenderPipelines.GUI_TEXTURED,
+			drawTexture(
+					graphics,
 					card.image().textureId(),
 					targetX,
 					targetY,
-					0,
-					0,
 					targetWidth,
 					targetHeight,
 					sourceWidth,
@@ -274,10 +281,10 @@ public final class PreviewCardStore {
 			);
 		} else {
 			String label = card.imageFailed() ? "No image" : spinner() + " Loading";
-			graphics.text(
+			graphics.drawTextWithShadow(
 					font,
 					label,
-					imageX + (THUMBNAIL_WIDTH - font.width(label)) / 2,
+					imageX + (THUMBNAIL_WIDTH - font.getWidth(label)) / 2,
 					imageY + (THUMBNAIL_HEIGHT - 9) / 2,
 					withAlpha(MUTED, alpha * textOpacity)
 			);
@@ -285,7 +292,7 @@ public final class PreviewCardStore {
 	}
 
 	private static String spinner() {
-		return switch ((Minecraft.getInstance().gui.getGuiTicks() / 4) & 3) {
+		return switch ((MinecraftClient.getInstance().inGameHud.getTicks() / 4) & 3) {
 			case 0 -> "|";
 			case 1 -> "/";
 			case 2 -> "-";
@@ -293,7 +300,7 @@ public final class PreviewCardStore {
 		};
 	}
 
-	private static void drawText(GuiGraphicsExtractor graphics, Font font, String text, int x, int y, int color) {
+	private static void drawText(DrawContext graphics, TextRenderer font, String text, int x, int y, int color) {
 		int cursor = x;
 		int index = 0;
 
@@ -301,8 +308,8 @@ public final class PreviewCardStore {
 			int nextEmoji = nextEmojiStart(text, index);
 			if (nextEmoji > index) {
 				String normal = text.substring(index, nextEmoji);
-				graphics.text(font, normal, cursor, y, color);
-				cursor += font.width(normal);
+				graphics.drawTextWithShadow(font, normal, cursor, y, color);
+				cursor += font.getWidth(normal);
 				index = nextEmoji;
 				continue;
 			}
@@ -311,17 +318,15 @@ public final class PreviewCardStore {
 			String emoji = text.substring(index, emojiEnd);
 			PreviewImage emojiImage = EmojiTextures.get(emoji);
 			if (emojiImage == null) {
-				graphics.text(font, emoji, cursor, y, color);
-				cursor += font.width(emoji);
+				graphics.drawTextWithShadow(font, emoji, cursor, y, color);
+				cursor += font.getWidth(emoji);
 			} else {
 				float opacity = ((color >>> 24) & 0xFF) / 255.0F;
-				graphics.blit(
-						RenderPipelines.GUI_TEXTURED,
+				drawTexture(
+						graphics,
 						emojiImage.textureId(),
 						cursor,
 						y - 1,
-						0,
-						0,
 						EMOJI_SIZE,
 						EMOJI_SIZE,
 						emojiImage.width(),
@@ -334,6 +339,32 @@ public final class PreviewCardStore {
 			}
 			index = emojiEnd;
 		}
+	}
+
+	private static void drawTexture(DrawContext graphics, Identifier textureId, int x, int y, int width, int height, int regionWidth, int regionHeight, int textureWidth, int textureHeight, int color) {
+		float alpha = ((color >>> 24) & 0xFF) / 255.0F;
+		float red = ((color >>> 16) & 0xFF) / 255.0F;
+		float green = ((color >>> 8) & 0xFF) / 255.0F;
+		float blue = (color & 0xFF) / 255.0F;
+		float u1 = 0.0F;
+		float u2 = (float) regionWidth / textureWidth;
+		float v1 = 0.0F;
+		float v2 = (float) regionHeight / textureHeight;
+		int x2 = x + width;
+		int y2 = y + height;
+
+		RenderSystem.setShaderTexture(0, textureId);
+		RenderSystem.setShader(GameRenderer::getPositionColorTexProgram);
+		RenderSystem.enableBlend();
+		Matrix4f matrix = graphics.getMatrices().peek().getPositionMatrix();
+		BufferBuilder bufferBuilder = Tessellator.getInstance().getBuffer();
+		bufferBuilder.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE);
+		bufferBuilder.vertex(matrix, x, y, 0).color(red, green, blue, alpha).texture(u1, v1).next();
+		bufferBuilder.vertex(matrix, x, y2, 0).color(red, green, blue, alpha).texture(u1, v2).next();
+		bufferBuilder.vertex(matrix, x2, y2, 0).color(red, green, blue, alpha).texture(u2, v2).next();
+		bufferBuilder.vertex(matrix, x2, y, 0).color(red, green, blue, alpha).texture(u2, v1).next();
+		BufferRenderer.drawWithGlobalProgram(bufferBuilder.end());
+		RenderSystem.disableBlend();
 	}
 
 	private static int nextEmojiStart(String text, int start) {
@@ -395,7 +426,7 @@ public final class PreviewCardStore {
 		static PreviewImage get(String emoji) {
 			Optional<PreviewImage> cached = CACHE.get(emoji);
 			if (cached != null) {
-				return cached.isPresent() ? cached.get() : null;
+				return cached.orElse(null);
 			}
 
 			Optional<PreviewImage> fontImage = createFromFont(emoji);
@@ -439,13 +470,13 @@ public final class PreviewCardStore {
 			NativeImage nativeImage = new NativeImage(CANVAS_SIZE, CANVAS_SIZE, false);
 			for (int y = 0; y < CANVAS_SIZE; y++) {
 				for (int x = 0; x < CANVAS_SIZE; x++) {
-					nativeImage.setPixel(x, y, bufferedImage.getRGB(x, y));
+					nativeImage.setColor(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
 				}
 			}
 
-			Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()));
-			DynamicTexture texture = new DynamicTexture(() -> "LinkPreview emoji", nativeImage);
-			Minecraft.getInstance().getTextureManager().register(id, texture);
+			Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()));
+			NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+			MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 			return Optional.of(new PreviewImage(id, CANVAS_SIZE, CANVAS_SIZE));
 		}
 
@@ -463,7 +494,7 @@ public final class PreviewCardStore {
 			HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
 					.thenApply(response -> response.statusCode() >= 200 && response.statusCode() < 300 ? Optional.of(response.body()) : Optional.<byte[]>empty())
 					.exceptionally(ignored -> Optional.empty())
-					.thenAccept(bytes -> Minecraft.getInstance().execute(() -> bytes.ifPresentOrElse(
+					.thenAccept(bytes -> MinecraftClient.getInstance().execute(() -> bytes.ifPresentOrElse(
 							body -> finishGoogleFetch(emoji, body),
 							() -> failGoogleFetch(emoji)
 					)));
@@ -473,9 +504,9 @@ public final class PreviewCardStore {
 			FETCHING.remove(emoji);
 			try {
 				NativeImage nativeImage = downscaleEmoji(readImage(bytes));
-				Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
-				DynamicTexture texture = new DynamicTexture(() -> "LinkPreview Google emoji", nativeImage);
-				Minecraft.getInstance().getTextureManager().register(id, texture);
+				Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
+				NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+				MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 				CACHE.put(emoji, Optional.of(new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight())));
 			} catch (IOException exception) {
 				CACHE.put(emoji, Optional.empty());
@@ -507,7 +538,7 @@ public final class PreviewCardStore {
 			NativeImage target = new NativeImage(EMOJI_TEXTURE_SIZE, EMOJI_TEXTURE_SIZE, false);
 			for (int y = 0; y < EMOJI_TEXTURE_SIZE; y++) {
 				for (int x = 0; x < EMOJI_TEXTURE_SIZE; x++) {
-					target.setPixel(x, y, averagedPixel(source, x, y));
+					target.setColor(x, y, averagedPixel(source, x, y));
 				}
 			}
 
@@ -528,16 +559,16 @@ public final class PreviewCardStore {
 
 			for (int y = startY; y < endY; y++) {
 				for (int x = startX; x < endX; x++) {
-					int pixel = source.getPixel(Math.min(source.getWidth() - 1, x), Math.min(source.getHeight() - 1, y));
+					int pixel = source.getColor(Math.min(source.getWidth() - 1, x), Math.min(source.getHeight() - 1, y));
 					alpha += (pixel >>> 24) & 0xFF;
-					red += (pixel >>> 16) & 0xFF;
+					blue += (pixel >>> 16) & 0xFF;
 					green += (pixel >>> 8) & 0xFF;
-					blue += pixel & 0xFF;
+					red += pixel & 0xFF;
 					count++;
 				}
 			}
 
-			return ((int) (alpha / count) << 24) | ((int) (red / count) << 16) | ((int) (green / count) << 8) | (int) (blue / count);
+			return ((int) (alpha / count) << 24) | ((int) (blue / count) << 16) | ((int) (green / count) << 8) | (int) (red / count);
 		}
 
 		private static java.awt.Font font() {
@@ -572,15 +603,25 @@ public final class PreviewCardStore {
 		}
 	}
 
-	public static boolean isSpacerLine(GuiMessage.Line line) {
-		return line.parent().content().getString().startsWith(SPACER_MARKER_PREFIX);
+	public static boolean isSpacerLine(ChatHudLine.Visible line) {
+		return visibleText(line).startsWith(SPACER_MARKER_PREFIX);
 	}
 
-	public static boolean isPreviewSourceLine(GuiMessage.Line line) {
-		return !isSpacerLine(line) && !UrlExtractor.findUrls(line.parent().content().getString()).isEmpty();
+	public static boolean isPreviewSourceLine(ChatHudLine.Visible line) {
+		return !isSpacerLine(line) && !UrlExtractor.findUrls(visibleText(line)).isEmpty();
 	}
 
-	private static boolean isSpacer(GuiMessage.Line line) {
+	private static String visibleText(ChatHudLine.Visible line) {
+		StringBuilder text = new StringBuilder();
+		OrderedText orderedText = line.content();
+		orderedText.accept((index, style, codePoint) -> {
+			text.appendCodePoint(codePoint);
+			return true;
+		});
+		return text.toString();
+	}
+
+	private static boolean isSpacer(ChatHudLine.Visible line) {
 		return isSpacerLine(line);
 	}
 
@@ -588,8 +629,8 @@ public final class PreviewCardStore {
 		return SPACER_MARKER_PREFIX + previewId + "]";
 	}
 
-	private static Long spacerId(GuiMessage.Line line) {
-		String text = line.parent().content().getString();
+	private static Long spacerId(ChatHudLine.Visible line) {
+		String text = visibleText(line);
 		if (!text.startsWith(SPACER_MARKER_PREFIX) || !text.endsWith("]")) {
 			return null;
 		}
@@ -615,7 +656,7 @@ public final class PreviewCardStore {
 		return Objects.equals(first, second);
 	}
 
-	private static int runStart(List<GuiMessage.Line> lines, int lineIndex, Long runId) {
+	private static int runStart(List<ChatHudLine.Visible> lines, int lineIndex, Long runId) {
 		int index = lineIndex;
 		while (index > 0 && isSpacer(lines.get(index - 1)) && sameId(runId, spacerId(lines.get(index - 1)))) {
 			index--;
@@ -624,7 +665,7 @@ public final class PreviewCardStore {
 		return index;
 	}
 
-	private static int runEnd(List<GuiMessage.Line> lines, int lineIndex, Long runId) {
+	private static int runEnd(List<ChatHudLine.Visible> lines, int lineIndex, Long runId) {
 		int index = lineIndex + 1;
 		while (index < lines.size() && isSpacer(lines.get(index)) && sameId(runId, spacerId(lines.get(index)))) {
 			index++;
@@ -656,18 +697,18 @@ public final class PreviewCardStore {
 	}
 
 	private PreviewImage createImage(long cardId, PreparedPreviewImage preparedImage) {
-		Identifier id = Identifier.fromNamespaceAndPath(LinkPreviewClient.MOD_ID, "preview/" + cardId);
+		Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "preview/" + cardId);
 		if (preparedImage.animated()) {
-			NativeImage texturePixels = copyNative(preparedImage.frames().getFirst());
-			DynamicTexture texture = new DynamicTexture(() -> "LinkPreview animated thumbnail", texturePixels);
-			Minecraft.getInstance().getTextureManager().register(id, texture);
+			NativeImage texturePixels = copyNative(preparedImage.frames().get(0));
+			NativeImageBackedTexture texture = new NativeImageBackedTexture(texturePixels);
+			MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 			LinkPreviewClient.LOGGER.info("Loaded animated LinkPreview GIF {}x{} with {} frames for card {}", preparedImage.width(), preparedImage.height(), preparedImage.frames().size(), cardId);
 			return new PreviewImage(id, preparedImage.width(), preparedImage.height(), texture, preparedImage.frames(), preparedImage.frameDelaysMillis());
 		}
 
 		NativeImage nativeImage = preparedImage.staticPixels();
-		DynamicTexture texture = new DynamicTexture(() -> "LinkPreview thumbnail", nativeImage);
-		Minecraft.getInstance().getTextureManager().register(id, texture);
+		NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+		MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 		LinkPreviewClient.LOGGER.info("Loaded LinkPreview image {}x{} for card {}", nativeImage.getWidth(), nativeImage.getHeight(), cardId);
 		return new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight());
 	}
@@ -845,16 +886,12 @@ public final class PreviewCardStore {
 	}
 
 	private static NativeImage readImage(byte[] imageBytes) throws IOException {
-		try {
-			return NativeImage.read(imageBytes);
-		} catch (IOException nativeImageException) {
-			BufferedImage bufferedImage = ImageIO.read(new ByteArrayInputStream(imageBytes));
-			if (bufferedImage == null) {
-				throw nativeImageException;
-			}
-
-			return bufferedToNative(bufferedImage);
+		BufferedImage bufferedImage = ImageIO.read(new ByteArrayInputStream(imageBytes));
+		if (bufferedImage == null) {
+			throw new IOException("Unsupported image format");
 		}
+
+		return bufferedToNative(bufferedImage);
 	}
 
 	private static NativeImage copyNative(NativeImage source) {
@@ -867,11 +904,15 @@ public final class PreviewCardStore {
 		NativeImage nativeImage = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), false);
 		for (int y = 0; y < bufferedImage.getHeight(); y++) {
 			for (int x = 0; x < bufferedImage.getWidth(); x++) {
-				nativeImage.setPixel(x, y, bufferedImage.getRGB(x, y));
+				nativeImage.setColor(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
 			}
 		}
 
 		return nativeImage;
+	}
+
+	private static int argbToAbgr(int argb) {
+		return (argb & 0xFF00FF00) | ((argb & 0x00FF0000) >> 16) | ((argb & 0x000000FF) << 16);
 	}
 
 	record PreparedPreviewImage(NativeImage staticPixels, int width, int height, List<NativeImage> frames, int[] frameDelaysMillis) {
@@ -910,49 +951,54 @@ public final class PreviewCardStore {
 
 	private static void release(PreviewCard card) {
 		if (card.image() != null) {
-			Minecraft.getInstance().getTextureManager().release(card.image().textureId());
+			MinecraftClient.getInstance().getTextureManager().destroyTexture(card.image().textureId());
 			card.image().close();
 		}
 	}
 
-	private static String clip(Font font, String text, int width) {
-		if (font.width(text) <= width) {
+	private static String clip(TextRenderer font, String text, int width) {
+		if (font.getWidth(text) <= width) {
 			return text;
 		}
 
-		return font.plainSubstrByWidth(text, Math.max(0, width - font.width("..."))) + "...";
+		return font.trimToWidth(text, Math.max(0, width - font.getWidth("..."))) + "...";
 	}
 
-	private static float lineAlpha(int now, GuiMessage.Line line) {
-		double age = (double) (now - line.addedTime()) / 200.0D;
+	private static float lineAlpha(int now, ChatHudLine.Visible line) {
+		int ticks = now - line.addedTime();
+		if (ticks >= 200) {
+			return 0.0F;
+		}
+
+		double age = (double) ticks / 200.0D;
 		double alpha = 1.0D - age;
-		alpha = Math.clamp(alpha * 10.0D, 0.0D, 1.0D);
+		alpha = MathHelper.clamp(alpha * 10.0D, 0.0D, 1.0D);
 		return (float) (alpha * alpha);
 	}
 
 	private static int withAlpha(int argb, float alphaScale) {
 		int alpha = (argb >>> 24) & 0xFF;
-		int scaledAlpha = Math.clamp(Math.round(alpha * alphaScale), 0, 255);
+		int scaledAlpha = MathHelper.clamp(Math.round(alpha * alphaScale), 0, 255);
 		return (scaledAlpha << 24) | (argb & 0x00FFFFFF);
 	}
 
-	private static HoverState hoverState(Minecraft minecraft, GuiGraphicsExtractor graphics, double chatScale) {
+	private static HoverState hoverState(MinecraftClient minecraft, DrawContext graphics, double chatScale) {
 		Window window = minecraft.getWindow();
-		int mouseGuiX = (int) (minecraft.mouseHandler.xpos() * graphics.guiWidth() / window.getWidth());
-		int mouseGuiY = (int) (minecraft.mouseHandler.ypos() * graphics.guiHeight() / window.getHeight());
+		int mouseGuiX = (int) (minecraft.mouse.getX() * graphics.getScaledWindowWidth() / window.getWidth());
+		int mouseGuiY = (int) (minecraft.mouse.getY() * graphics.getScaledWindowHeight() / window.getHeight());
 		int localX = (int) Math.floor(mouseGuiX / chatScale - 4.0D);
 		int localY = (int) Math.floor(mouseGuiY / chatScale);
 		return new HoverState(mouseGuiX, mouseGuiY, localX, localY);
 	}
 
-	private static void showTooltipIfHovered(GuiGraphicsExtractor graphics, Font font, HoverState hover, int x, int y, int textRight, String text) {
+	private static void showTooltipIfHovered(DrawContext graphics, TextRenderer font, HoverState hover, int x, int y, int textRight, String text) {
 		if (hover == null || text == null || text.isBlank()) {
 			return;
 		}
 
-		int width = Math.clamp(font.width(text), 0, Math.max(0, textRight - x));
-		if (hover.localX() >= x && hover.localX() < x + width && hover.localY() >= y && hover.localY() < y + font.lineHeight) {
-			graphics.setTooltipForNextFrame(font, Component.literal(text), hover.mouseGuiX(), hover.mouseGuiY());
+		int width = MathHelper.clamp(font.getWidth(text), 0, Math.max(0, textRight - x));
+		if (hover.localX() >= x && hover.localX() < x + width && hover.localY() >= y && hover.localY() < y + font.fontHeight) {
+			graphics.drawTooltip(font, Text.literal(text), hover.mouseGuiX(), hover.mouseGuiY());
 		}
 	}
 
