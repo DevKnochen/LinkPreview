@@ -3,18 +3,24 @@ package de.devknochen.linkpreview;
 import java.net.http.HttpClient;
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 import com.mojang.authlib.GameProfile;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.hud.ChatHudLine;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.network.message.MessageSignatureData;
-import net.minecraft.text.Text;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
+import net.minecraft.client.multiplayer.chat.GuiMessageSource;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MessageSignature;
+import net.minecraft.resources.Identifier;
+
+import de.devknochen.linkpreview.mixin.ChatComponentAccessor;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,9 +41,13 @@ public final class LinkPreviewClient implements ClientModInitializer {
 		PreviewImageService imageService = new PreviewImageService(previewService.httpClient());
 		PreviewRenderer renderer = new PreviewRenderer(cardStore, imageService);
 
-		HudRenderCallback.EVENT.register((drawContext, tickDelta) -> cardStore.render(drawContext));
+		HudElementRegistry.attachElementAfter(
+				VanillaHudElements.CHAT,
+				Identifier.fromNamespaceAndPath(MOD_ID, "preview_cards"),
+				cardStore::render
+		);
 
-		ClientReceiveMessageEvents.ALLOW_CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
+		ClientReceiveMessageEvents.ALLOW_CHAT.register((message, playerChatMessage, sender, _, _) -> {
 			String rawMessage = message.getString();
 			List<String> urls = UrlExtractor.findUrls(rawMessage);
 			if (urls.isEmpty()) {
@@ -45,8 +55,8 @@ public final class LinkPreviewClient implements ClientModInitializer {
 			}
 
 			List<PendingPreview> previews = reservePreviews(urls, renderer);
-			MessageSignatureData signature = signedMessage == null ? null : signedMessage.signature();
-			insertLinkMessageWithPreviewSpace(rawMessage, previews, signature, sender);
+			MessageSignature signature = playerChatMessage == null ? null : playerChatMessage.signature();
+			insertLinkMessageWithPreviewSpace(rawMessage, previews, GuiMessageSource.PLAYER, signature, sender);
 			fetchPreviews(previews, previewService, renderer);
 			return false;
 		});
@@ -63,7 +73,7 @@ public final class LinkPreviewClient implements ClientModInitializer {
 			}
 
 			List<PendingPreview> previews = reservePreviews(urls, renderer);
-			insertLinkMessageWithPreviewSpace(rawMessage, previews, null, null);
+			insertLinkMessageWithPreviewSpace(rawMessage, previews, GuiMessageSource.SYSTEM_CLIENT, null, null);
 			fetchPreviews(previews, previewService, renderer);
 			return false;
 		});
@@ -72,9 +82,12 @@ public final class LinkPreviewClient implements ClientModInitializer {
 	}
 
 	private static List<PendingPreview> reservePreviews(List<String> urls, PreviewRenderer renderer) {
-		return urls.stream()
-				.map(url -> new PendingPreview(renderer.reserve(url), url))
-				.toList();
+		List<PendingPreview> previews = new ArrayList<>(urls.size());
+		for (String url : urls) {
+			previews.add(new PendingPreview(renderer.reserve(url), url));
+		}
+
+		return previews;
 	}
 
 	private static void fetchPreviews(List<PendingPreview> previews, PreviewService previewService, PreviewRenderer renderer) {
@@ -86,37 +99,37 @@ public final class LinkPreviewClient implements ClientModInitializer {
 		}
 	}
 
-	private static void insertLinkMessageWithPreviewSpace(String rawMessage, List<PendingPreview> previews, MessageSignatureData signature, GameProfile sender) {
-		MinecraftClient minecraft = MinecraftClient.getInstance();
-		Text message = LinkifiedText.from(rawMessage);
-		if (sender != null) {
+	private static void insertLinkMessageWithPreviewSpace(String rawMessage, List<PendingPreview> previews, GuiMessageSource source, MessageSignature signature, GameProfile sender) {
+		Minecraft minecraft = Minecraft.getInstance();
+		Component message = LinkifiedText.from(rawMessage);
+		if (source == GuiMessageSource.PLAYER) {
 			message = decorateForChatHeads(minecraft, message, sender);
 		}
 
-		addUntaggedMessage(minecraft, message, signature);
+		addUntaggedMessage(minecraft, message, source, signature);
 		reservePreviewSpace(previews);
 	}
 
-	private static Text decorateForChatHeads(MinecraftClient minecraft, Text message, GameProfile sender) {
+	private static Component decorateForChatHeads(Minecraft minecraft, Component message, GameProfile sender) {
 		try {
 			Class<?> chatHeads = Class.forName("dzwdz.chat_heads.ChatHeads");
-			Method handleAddedMessage = chatHeads.getMethod("handleAddedMessage", Text.class, PlayerListEntry.class);
-			return (Text) handleAddedMessage.invoke(null, message, playerInfo(minecraft, sender));
+			Method handleAddedMessage = chatHeads.getMethod("handleAddedMessage", Component.class, PlayerInfo.class);
+			return (Component) handleAddedMessage.invoke(null, message, playerInfo(minecraft, sender));
 		} catch (ReflectiveOperationException exception) {
 			return message;
 		}
 	}
 
-	private static PlayerListEntry playerInfo(MinecraftClient minecraft, GameProfile sender) {
-		if (sender == null || minecraft.getNetworkHandler() == null) {
+	private static PlayerInfo playerInfo(Minecraft minecraft, GameProfile sender) {
+		if (sender == null || minecraft.getConnection() == null) {
 			return null;
 		}
 
-		return minecraft.getNetworkHandler().getPlayerListEntry(sender.getId());
+		return minecraft.getConnection().getPlayerInfo(sender.id());
 	}
 
 	private static void reservePreviewSpace(List<PendingPreview> previews) {
-		MinecraftClient minecraft = MinecraftClient.getInstance();
+		Minecraft minecraft = Minecraft.getInstance();
 		for (PendingPreview preview : previews) {
 			for (int line = 0; line < PreviewCardStore.spacerLines(true); line++) {
 				addSilentMessage(minecraft, PreviewCardStore.spacerComponent(preview.id()));
@@ -124,15 +137,20 @@ public final class LinkPreviewClient implements ClientModInitializer {
 		}
 	}
 
-	private static void addSilentMessage(MinecraftClient minecraft, Text message) {
-		ChatHudLine chatHudLine = new ChatHudLine(minecraft.inGameHud.getTicks(), message, null, null);
-		LinkPreviewChatAccess chat = (LinkPreviewChatAccess) minecraft.inGameHud.getChatHud();
-		chat.linkpreview$addVisibleMessage(chatHudLine);
-		chat.linkpreview$addMessageToQueue(chatHudLine);
+	private static void addSilentMessage(Minecraft minecraft, Component message) {
+		GuiMessage guiMessage = new GuiMessage(minecraft.gui.hud.getGuiTicks(), message, null, GuiMessageSource.SYSTEM_CLIENT, null);
+		ChatComponentAccessor chat = (ChatComponentAccessor) minecraft.gui.hud.getChat();
+		chat.linkpreview$addMessageToDisplayQueue(guiMessage);
+		chat.linkpreview$addMessageToQueue(guiMessage);
 	}
 
-	private static void addUntaggedMessage(MinecraftClient minecraft, Text message, MessageSignatureData signature) {
-		minecraft.inGameHud.getChatHud().addMessage(message, signature, null);
+	private static void addUntaggedMessage(Minecraft minecraft, Component message, GuiMessageSource source, MessageSignature signature) {
+		if (source == GuiMessageSource.PLAYER) {
+			minecraft.gui.hud.getChat().addPlayerMessage(message, signature, null);
+			return;
+		}
+
+		((ChatComponentAccessor) minecraft.gui.hud.getChat()).linkpreview$addMessage(message, signature, source, null);
 	}
 
 	private record PendingPreview(long id, String url) {
