@@ -48,7 +48,7 @@ public final class LinkifiedText {
 
 		try {
 			URI uri = URI.create(url);
-			return style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, uri.toString()));
+			return style.withClickEvent(new ClickEvent.OpenUrl(uri));
 		} catch (IllegalArgumentException exception) {
 			return style;
 		}

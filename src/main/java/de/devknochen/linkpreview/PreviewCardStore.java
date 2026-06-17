@@ -19,8 +19,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.metadata.IIOMetadata;
@@ -35,13 +33,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.gui.hud.ChatHudLine;
 import net.minecraft.client.gui.screen.ChatScreen;
-import net.minecraft.client.render.BufferBuilder;
-import net.minecraft.client.render.BufferRenderer;
-import net.minecraft.client.gl.ShaderProgramKeys;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.Tessellator;
-import net.minecraft.client.render.VertexFormat;
-import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.util.Window;
@@ -49,7 +41,6 @@ import net.minecraft.text.OrderedText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
-import org.joml.Matrix4f;
 
 public final class PreviewCardStore {
 	public static final String SPACER_MARKER_PREFIX = "[linkpreview-spacer:";
@@ -72,8 +63,6 @@ public final class PreviewCardStore {
 	private static final int TEXT = 0xFFE6EDF3;
 	private static final int MUTED = 0xFF9CA3AF;
 	private static final int TITLE = 0xFF2F81F7;
-	private static final float TEXTURE_Z = 100.0F;
-
 	private final List<PreviewCard> cards = new ArrayList<>();
 	private long nextId;
 
@@ -345,35 +334,21 @@ public final class PreviewCardStore {
 	}
 
 	private static void drawTexture(DrawContext graphics, Identifier textureId, int x, int y, int width, int height, int regionWidth, int regionHeight, int textureWidth, int textureHeight, int color) {
-		float alpha = ((color >>> 24) & 0xFF) / 255.0F;
-		float red = ((color >>> 16) & 0xFF) / 255.0F;
-		float green = ((color >>> 8) & 0xFF) / 255.0F;
-		float blue = (color & 0xFF) / 255.0F;
-		float u1 = 0.0F;
-		float u2 = (float) regionWidth / textureWidth;
-		float v1 = 0.0F;
-		float v2 = (float) regionHeight / textureHeight;
-		int x2 = x + width;
-		int y2 = y + height;
-
-		RenderSystem.setShaderTexture(0, textureId);
-		RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
-		float[] shaderColor = RenderSystem.getShaderColor().clone();
-		RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-		RenderSystem.enableBlend();
-		RenderSystem.defaultBlendFunc();
-		try {
-			Matrix4f matrix = graphics.getMatrices().peek().getPositionMatrix();
-			BufferBuilder bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
-			bufferBuilder.vertex(matrix, x, y, TEXTURE_Z).texture(u1, v1).color(red, green, blue, alpha);
-			bufferBuilder.vertex(matrix, x, y2, TEXTURE_Z).texture(u1, v2).color(red, green, blue, alpha);
-			bufferBuilder.vertex(matrix, x2, y2, TEXTURE_Z).texture(u2, v2).color(red, green, blue, alpha);
-			bufferBuilder.vertex(matrix, x2, y, TEXTURE_Z).texture(u2, v1).color(red, green, blue, alpha);
-			BufferRenderer.drawWithGlobalProgram(bufferBuilder.end());
-		} finally {
-			RenderSystem.setShaderColor(shaderColor[0], shaderColor[1], shaderColor[2], shaderColor[3]);
-			RenderSystem.disableBlend();
-		}
+		graphics.drawTexture(
+				RenderLayer::getGuiTextured,
+				textureId,
+				x,
+				y,
+				0.0F,
+				0.0F,
+				width,
+				height,
+				regionWidth,
+				regionHeight,
+				textureWidth,
+				textureHeight,
+				color
+		);
 	}
 
 	private static int nextEmojiStart(String text, int start) {
@@ -484,7 +459,7 @@ public final class PreviewCardStore {
 			}
 
 			Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()));
-			NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+			NativeImageBackedTexture texture = texture(id, nativeImage);
 			MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 			return Optional.of(new PreviewImage(id, CANVAS_SIZE, CANVAS_SIZE));
 		}
@@ -514,7 +489,7 @@ public final class PreviewCardStore {
 			try {
 				NativeImage nativeImage = downscaleEmoji(readImage(bytes, false));
 				Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
-				NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+				NativeImageBackedTexture texture = texture(id, nativeImage);
 				MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 				CACHE.put(emoji, Optional.of(new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight())));
 			} catch (IOException exception) {
@@ -709,14 +684,14 @@ public final class PreviewCardStore {
 		Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "preview/" + cardId);
 		if (preparedImage.animated()) {
 			NativeImage texturePixels = copyNative(preparedImage.frames().get(0));
-			NativeImageBackedTexture texture = new NativeImageBackedTexture(texturePixels);
+			NativeImageBackedTexture texture = texture(id, texturePixels);
 			MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 			LinkPreviewClient.LOGGER.info("Loaded animated LinkPreview GIF {}x{} with {} frames for card {}", preparedImage.width(), preparedImage.height(), preparedImage.frames().size(), cardId);
 			return new PreviewImage(id, preparedImage.width(), preparedImage.height(), texture, preparedImage.frames(), preparedImage.frameDelaysMillis());
 		}
 
 		NativeImage nativeImage = preparedImage.staticPixels();
-		NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
+		NativeImageBackedTexture texture = texture(id, nativeImage);
 		MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 		LinkPreviewClient.LOGGER.info("Loaded LinkPreview image {}x{} for card {}", nativeImage.getWidth(), nativeImage.getHeight(), cardId);
 		return new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight());
@@ -907,6 +882,10 @@ public final class PreviewCardStore {
 		NativeImage copy = new NativeImage(source.getWidth(), source.getHeight(), false);
 		copy.copyFrom(source);
 		return copy;
+	}
+
+	private static NativeImageBackedTexture texture(Identifier id, NativeImage image) {
+		return new NativeImageBackedTexture(id::toString, image);
 	}
 
 	private static NativeImage bufferedToNative(BufferedImage bufferedImage, boolean forceOpaque) {
