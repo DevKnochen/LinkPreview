@@ -6,9 +6,6 @@ import de.devknochen.linkpreview.LinkPreviewChatAccess;
 
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.gui.hud.ChatHudLine;
-import net.minecraft.client.gui.hud.MessageIndicator;
-import net.minecraft.network.message.MessageSignatureData;
-import net.minecraft.text.Text;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -25,6 +22,9 @@ public abstract class ChatComponentAccessor implements LinkPreviewChatAccess {
 	@Accessor("scrolledLines")
 	public abstract int linkpreview$scrolledLines();
 
+	@Invoker("addVisibleMessage")
+	public abstract void linkpreview$invokeAddVisibleMessage(ChatHudLine message);
+
 	@Invoker("addMessage")
-	public abstract void linkpreview$addMessage(Text message, MessageSignatureData signature, int ticks, MessageIndicator indicator, boolean refresh);
+	public abstract void linkpreview$invokeAddMessage(ChatHudLine message);
 }

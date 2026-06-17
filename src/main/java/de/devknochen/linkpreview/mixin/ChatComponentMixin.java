@@ -69,9 +69,7 @@ public abstract class ChatComponentMixin {
 	}
 
 	@Shadow
-	private boolean isChatFocused() {
-		throw new AssertionError();
-	}
+	public abstract boolean isChatFocused();
 
 	@Shadow
 	private int getIndicatorX(ChatHudLine.Visible line) {
@@ -93,7 +91,7 @@ public abstract class ChatComponentMixin {
 	 * @reason Hide LinkPreview spacer messages and keep the source message accent used by the 26.1 implementation.
 	 */
 	@Overwrite
-	public void render(DrawContext context, int currentTick, int mouseX, int mouseY) {
+	public void render(DrawContext context, int currentTick, int mouseX, int mouseY, boolean focused) {
 		if (isChatHidden()) {
 			return;
 		}
@@ -104,7 +102,7 @@ public abstract class ChatComponentMixin {
 			return;
 		}
 
-		boolean chatFocused = isChatFocused();
+		boolean chatFocused = focused;
 		float scale = (float) getChatScale();
 		int maxWidth = MathHelper.ceil(getWidth() / scale);
 		int scaledHeight = context.getScaledWindowHeight();
