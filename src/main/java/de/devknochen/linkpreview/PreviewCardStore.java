@@ -354,15 +354,14 @@ public final class PreviewCardStore {
 		int y2 = y + height;
 
 		RenderSystem.setShaderTexture(0, textureId);
-		RenderSystem.setShader(GameRenderer::getPositionColorTexProgram);
+		RenderSystem.setShader(GameRenderer::getPositionTexColorProgram);
 		RenderSystem.enableBlend();
 		Matrix4f matrix = graphics.getMatrices().peek().getPositionMatrix();
-		BufferBuilder bufferBuilder = Tessellator.getInstance().getBuffer();
-		bufferBuilder.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE);
-		bufferBuilder.vertex(matrix, x, y, 0).color(red, green, blue, alpha).texture(u1, v1).next();
-		bufferBuilder.vertex(matrix, x, y2, 0).color(red, green, blue, alpha).texture(u1, v2).next();
-		bufferBuilder.vertex(matrix, x2, y2, 0).color(red, green, blue, alpha).texture(u2, v2).next();
-		bufferBuilder.vertex(matrix, x2, y, 0).color(red, green, blue, alpha).texture(u2, v1).next();
+		BufferBuilder bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
+		bufferBuilder.vertex(matrix, x, y, 0).texture(u1, v1).color(red, green, blue, alpha);
+		bufferBuilder.vertex(matrix, x, y2, 0).texture(u1, v2).color(red, green, blue, alpha);
+		bufferBuilder.vertex(matrix, x2, y2, 0).texture(u2, v2).color(red, green, blue, alpha);
+		bufferBuilder.vertex(matrix, x2, y, 0).texture(u2, v1).color(red, green, blue, alpha);
 		BufferRenderer.drawWithGlobalProgram(bufferBuilder.end());
 		RenderSystem.disableBlend();
 	}
@@ -474,7 +473,7 @@ public final class PreviewCardStore {
 				}
 			}
 
-			Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()));
+			Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()));
 			NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
 			MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 			return Optional.of(new PreviewImage(id, CANVAS_SIZE, CANVAS_SIZE));
@@ -504,7 +503,7 @@ public final class PreviewCardStore {
 			FETCHING.remove(emoji);
 			try {
 				NativeImage nativeImage = downscaleEmoji(readImage(bytes));
-				Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
+				Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
 				NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
 				MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
 				CACHE.put(emoji, Optional.of(new PreviewImage(id, nativeImage.getWidth(), nativeImage.getHeight())));
@@ -697,7 +696,7 @@ public final class PreviewCardStore {
 	}
 
 	private PreviewImage createImage(long cardId, PreparedPreviewImage preparedImage) {
-		Identifier id = new Identifier(LinkPreviewClient.MOD_ID, "preview/" + cardId);
+		Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "preview/" + cardId);
 		if (preparedImage.animated()) {
 			NativeImage texturePixels = copyNative(preparedImage.frames().get(0));
 			NativeImageBackedTexture texture = new NativeImageBackedTexture(texturePixels);

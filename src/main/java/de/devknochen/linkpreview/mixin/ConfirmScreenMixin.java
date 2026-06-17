@@ -1,7 +1,6 @@
 package de.devknochen.linkpreview.mixin;
 
 import net.minecraft.client.gui.screen.ConfirmScreen;
-import net.minecraft.text.StringVisitable;
 import net.minecraft.text.Text;
 import net.minecraft.text.TextColor;
 
@@ -13,10 +12,10 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 public abstract class ConfirmScreenMixin {
 	@ModifyArg(
 			method = "init",
-			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/font/MultilineText;create(Lnet/minecraft/client/font/TextRenderer;Lnet/minecraft/text/StringVisitable;I)Lnet/minecraft/client/font/MultilineText;"),
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/font/MultilineText;create(Lnet/minecraft/client/font/TextRenderer;Lnet/minecraft/text/Text;I)Lnet/minecraft/client/font/MultilineText;"),
 			index = 1
 	)
-	private StringVisitable linkpreview$styleConfirmLinkMessage(StringVisitable message) {
+	private Text linkpreview$styleConfirmLinkMessage(Text message) {
 		if (!"net.minecraft.client.gui.screen.ConfirmLinkScreen".equals(((Object) this).getClass().getName())) {
 			return message;
 		}
