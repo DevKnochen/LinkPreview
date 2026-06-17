@@ -112,7 +112,7 @@ public final class LinkPreviewClient implements ClientModInitializer {
 			return null;
 		}
 
-		return minecraft.getNetworkHandler().getPlayerListEntry(sender.getId());
+		return minecraft.getNetworkHandler().getPlayerListEntry(sender.id());
 	}
 
 	private static void reservePreviewSpace(List<PendingPreview> previews) {
