@@ -107,7 +107,7 @@ public final class PreviewCardStore {
 		}
 
 		Minecraft minecraft = Minecraft.getInstance();
-		ChatComponentAccessor accessor = (ChatComponentAccessor) minecraft.gui.getChat();
+		ChatComponentAccessor accessor = (ChatComponentAccessor) minecraft.gui.hud.getChat();
 		String marker = spacerMarker(cardId);
 		accessor.linkpreview$trimmedMessages().removeIf(line -> marker.equals(line.parent().content().getString()));
 		accessor.linkpreview$allMessages().removeIf(message -> marker.equals(message.content().getString()));
@@ -139,9 +139,9 @@ public final class PreviewCardStore {
 			return;
 		}
 
-		int now = minecraft.gui.getGuiTicks();
+		int now = minecraft.gui.hud.getGuiTicks();
 		Font font = minecraft.font;
-		ChatComponent chat = minecraft.gui.getChat();
+		ChatComponent chat = minecraft.gui.hud.getChat();
 		ChatComponentAccessor accessor = (ChatComponentAccessor) chat;
 		List<GuiMessage.Line> lines = accessor.linkpreview$trimmedMessages();
 		int scroll = accessor.linkpreview$chatScrollbarPos();
@@ -285,7 +285,7 @@ public final class PreviewCardStore {
 	}
 
 	private static String spinner() {
-		return switch ((Minecraft.getInstance().gui.getGuiTicks() / 4) & 3) {
+		return switch ((Minecraft.getInstance().gui.hud.getGuiTicks() / 4) & 3) {
 			case 0 -> "|";
 			case 1 -> "/";
 			case 2 -> "-";

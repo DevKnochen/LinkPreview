@@ -138,19 +138,19 @@ public final class LinkPreviewClient implements ClientModInitializer {
 	}
 
 	private static void addSilentMessage(Minecraft minecraft, Component message) {
-		GuiMessage guiMessage = new GuiMessage(minecraft.gui.getGuiTicks(), message, null, GuiMessageSource.SYSTEM_CLIENT, null);
-		ChatComponentAccessor chat = (ChatComponentAccessor) minecraft.gui.getChat();
+		GuiMessage guiMessage = new GuiMessage(minecraft.gui.hud.getGuiTicks(), message, null, GuiMessageSource.SYSTEM_CLIENT, null);
+		ChatComponentAccessor chat = (ChatComponentAccessor) minecraft.gui.hud.getChat();
 		chat.linkpreview$addMessageToDisplayQueue(guiMessage);
 		chat.linkpreview$addMessageToQueue(guiMessage);
 	}
 
 	private static void addUntaggedMessage(Minecraft minecraft, Component message, GuiMessageSource source, MessageSignature signature) {
 		if (source == GuiMessageSource.PLAYER) {
-			minecraft.gui.getChat().addPlayerMessage(message, signature, null);
+			minecraft.gui.hud.getChat().addPlayerMessage(message, signature, null);
 			return;
 		}
 
-		((ChatComponentAccessor) minecraft.gui.getChat()).linkpreview$addMessage(message, signature, source, null);
+		((ChatComponentAccessor) minecraft.gui.hud.getChat()).linkpreview$addMessage(message, signature, source, null);
 	}
 
 	private record PendingPreview(long id, String url) {

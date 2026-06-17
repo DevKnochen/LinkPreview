@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 
 public final class PreviewImageService {
 	private static final int MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-	private static final Pattern YOUTUBE_ID = Pattern.compile("(?:youtu\\.be/|youtube\\.com/(?:watch\\?[^#]*?v=|embed/|shorts/))([A-Za-z0-9_-]{11})");
+	private static final Pattern YOUTUBE_ID = Pattern.compile("(?:youtu\\.be/|(?:www\\.|m\\.)?youtube\\.com/(?:watch\\?[^#]*?v=|embed/|shorts/))([A-Za-z0-9_-]{11})");
 
 	private final HttpClient httpClient;
 	private final ConcurrentHashMap<String, CompletableFuture<Optional<byte[]>>> inFlight = new ConcurrentHashMap<>();
@@ -66,7 +66,10 @@ public final class PreviewImageService {
 
 		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
 				.thenApply(this::parseResponse)
-				.exceptionally(ignored -> Optional.empty());
+				.exceptionally(failure -> {
+					LinkPreviewClient.LOGGER.debug("Link preview image request failed for {}", url, failure);
+					return Optional.empty();
+				});
 	}
 
 	private static Optional<String> youtubeId(String pageUrl) {

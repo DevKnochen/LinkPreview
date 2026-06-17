@@ -2,7 +2,7 @@ package de.devknochen.linkpreview;
 
 import java.net.URI;
 
-import net.minecraft.client.Minecraft;
+import net.minecraft.client.MinecraftClient;
 
 public final class PreviewRenderer {
 	private static final int MAX_TITLE_LENGTH = 120;
@@ -26,15 +26,15 @@ public final class PreviewRenderer {
 	}
 
 	public void complete(long previewId, String sourceUrl, PreviewResponse preview) {
-		Minecraft minecraft = Minecraft.getInstance();
+		MinecraftClient minecraft = MinecraftClient.getInstance();
 		minecraft.execute(() -> completeOnClientThread(minecraft, previewId, sourceUrl, preview));
 	}
 
 	public void discard(long previewId) {
-		Minecraft.getInstance().execute(() -> cardStore.discard(previewId));
+		MinecraftClient.getInstance().execute(() -> cardStore.discard(previewId));
 	}
 
-	private void completeOnClientThread(Minecraft minecraft, long previewId, String sourceUrl, PreviewResponse preview) {
+	private void completeOnClientThread(MinecraftClient minecraft, long previewId, String sourceUrl, PreviewResponse preview) {
 		if (preview.isEmpty()) {
 			cardStore.discard(previewId);
 			return;
@@ -49,13 +49,27 @@ public final class PreviewRenderer {
 		if (hasImage) {
 			imageService.fetch(sourceUrl)
 					.thenApply(image -> image.flatMap(PreviewCardStore::decodeImage))
+					.exceptionally(failure -> {
+						LinkPreviewClient.LOGGER.warn("Failed to prepare LinkPreview image for {}", sourceUrl, failure);
+						return java.util.Optional.empty();
+					})
 					.thenAccept(image -> minecraft.execute(() -> image.ifPresentOrElse(
-							preparedImage -> cardStore.attachImage(previewId, preparedImage),
+							preparedImage -> attachImage(previewId, sourceUrl, preparedImage),
 							() -> cardStore.markImageUnavailable(previewId)
 					)));
 		} else {
 			LinkPreviewClient.LOGGER.warn("LinkPreview metadata contains no image for {}", sourceUrl);
 			cardStore.markImageUnavailable(previewId);
+		}
+	}
+
+	private void attachImage(long previewId, String sourceUrl, PreviewCardStore.PreparedPreviewImage preparedImage) {
+		try {
+			cardStore.attachImage(previewId, preparedImage);
+		} catch (RuntimeException exception) {
+			preparedImage.close();
+			cardStore.markImageUnavailable(previewId);
+			LinkPreviewClient.LOGGER.warn("Failed to attach LinkPreview image for {}", sourceUrl, exception);
 		}
 	}
 

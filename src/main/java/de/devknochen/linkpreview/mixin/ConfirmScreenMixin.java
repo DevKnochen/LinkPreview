@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 @Mixin(ConfirmScreen.class)
 public abstract class ConfirmScreenMixin {
 	@ModifyArg(
-			method = "init",
+			method = "addMessage",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/components/MultiLineTextWidget;<init>(Lnet/minecraft/network/chat/Component;Lnet/minecraft/client/gui/Font;)V"),
 			index = 0
 	)
