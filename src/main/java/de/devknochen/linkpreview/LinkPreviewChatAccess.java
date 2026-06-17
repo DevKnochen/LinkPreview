@@ -2,28 +2,22 @@ package de.devknochen.linkpreview;
 
 import java.util.List;
 
-import net.minecraft.client.gui.hud.ChatHudLine;
-import net.minecraft.client.gui.hud.MessageIndicator;
-import net.minecraft.network.message.MessageSignatureData;
-import net.minecraft.text.Text;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
+import net.minecraft.client.multiplayer.chat.GuiMessageSource;
+import net.minecraft.client.multiplayer.chat.GuiMessageTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MessageSignature;
 
 public interface LinkPreviewChatAccess {
-	List<ChatHudLine.Visible> linkpreview$visibleMessages();
+	List<GuiMessage.Line> linkpreview$trimmedMessages();
 
-	List<ChatHudLine> linkpreview$messages();
+	List<GuiMessage> linkpreview$allMessages();
 
-	int linkpreview$scrolledLines();
+	int linkpreview$chatScrollbarPos();
 
-	void linkpreview$addMessage(Text message, MessageSignatureData signature, int ticks, MessageIndicator indicator, boolean refresh);
+	void linkpreview$addMessage(Component message, MessageSignature signature, GuiMessageSource source, GuiMessageTag tag);
 
-	default void linkpreview$addVisibleMessage(ChatHudLine message) {
-		linkpreview$addMessage(message.content(), message.signature(), message.creationTick(), message.indicator(), true);
-	}
+	void linkpreview$addMessageToDisplayQueue(GuiMessage message);
 
-	default void linkpreview$addMessageToQueue(ChatHudLine message) {
-		linkpreview$messages().add(0, message);
-		while (linkpreview$messages().size() > 100) {
-			linkpreview$messages().remove(linkpreview$messages().size() - 1);
-		}
-	}
+	void linkpreview$addMessageToQueue(GuiMessage message);
 }
