@@ -3,6 +3,7 @@ package de.devknochen.linkpreview.mixin;
 import java.util.List;
 
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.gui.hud.ChatHudLine;
@@ -43,23 +44,12 @@ public abstract class ChatComponentMixin {
 	public abstract int getVisibleLineCount();
 
 	@Shadow
-	public abstract double getChatScale();
-
-	@Shadow
-	public abstract int getWidth();
-
-	@Shadow
-	private int getMessageIndex(double chatLineX, double chatLineY) {
+	private double getChatScale() {
 		throw new AssertionError();
 	}
 
 	@Shadow
-	private double toChatLineX(double x) {
-		throw new AssertionError();
-	}
-
-	@Shadow
-	private double toChatLineY(double y) {
+	private int getWidth() {
 		throw new AssertionError();
 	}
 
@@ -71,27 +61,12 @@ public abstract class ChatComponentMixin {
 	@Shadow
 	public abstract boolean isChatFocused();
 
-	@Shadow
-	private int getIndicatorX(ChatHudLine.Visible line) {
-		throw new AssertionError();
-	}
-
-	@Shadow
-	private void drawIndicatorIcon(DrawContext context, int x, int y, MessageIndicator.Icon icon) {
-		throw new AssertionError();
-	}
-
-	@Shadow
-	private static double getMessageOpacityMultiplier(int age) {
-		throw new AssertionError();
-	}
-
 	/**
 	 * @author DevKnochen
 	 * @reason Hide LinkPreview spacer messages and keep the source message accent used by the 26.1 implementation.
 	 */
 	@Overwrite
-	public void render(DrawContext context, int currentTick, int mouseX, int mouseY, boolean focused) {
+	public void render(DrawContext context, TextRenderer textRenderer, int currentTick, int mouseX, int mouseY, boolean focused, boolean refresh) {
 		if (isChatHidden()) {
 			return;
 		}
@@ -110,7 +85,6 @@ public abstract class ChatComponentMixin {
 		context.getMatrices().scale(scale, scale);
 		context.getMatrices().translate(4.0F, 0.0F);
 		int chatBottom = MathHelper.floor((scaledHeight - 40) / scale);
-		int hoveredMessageIndex = getMessageIndex(toChatLineX(mouseX), toChatLineY(mouseY));
 		double textOpacity = client.options.getChatOpacity().getValue() * 0.9F + 0.1F;
 		double backgroundOpacity = client.options.getTextBackgroundOpacity().getValue();
 		double spacing = client.options.getChatLineSpacing().getValue();
@@ -130,7 +104,7 @@ public abstract class ChatComponentMixin {
 				continue;
 			}
 
-			double opacityMultiplier = chatFocused ? 1.0 : getMessageOpacityMultiplier(age);
+			double opacityMultiplier = chatFocused ? 1.0 : linkpreview$messageOpacityMultiplier(age);
 			int textAlpha = (int) (255.0 * opacityMultiplier * textOpacity);
 			int backgroundAlpha = (int) (255.0 * opacityMultiplier * backgroundOpacity);
 			renderedLines++;
@@ -152,14 +126,9 @@ public abstract class ChatComponentMixin {
 			if (indicator != null) {
 				int indicatorColor = indicator.indicatorColor() | textAlpha << 24;
 				context.fill(-4, entryBottom - lineHeight, -2, entryBottom, indicatorColor);
-				if (lineIndex == hoveredMessageIndex && indicator.icon() != null) {
-					int indicatorX = getIndicatorX(visible);
-					int indicatorY = textY + 9;
-					drawIndicatorIcon(context, indicatorX, indicatorY, indicator.icon());
-				}
 			}
 
-			context.drawTextWithShadow(client.textRenderer, visible.content(), 0, textY, 0xFFFFFF + (textAlpha << 24));
+			context.drawTextWithShadow(textRenderer, visible.content(), 0, textY, 0xFFFFFF + (textAlpha << 24));
 			context.getMatrices().popMatrix();
 		}
 
@@ -170,7 +139,7 @@ public abstract class ChatComponentMixin {
 			context.getMatrices().pushMatrix();
 			context.getMatrices().translate(0.0F, (float) chatBottom);
 			context.fill(-2, 0, maxWidth + 4, 9, queueBackgroundAlpha << 24);
-			context.drawTextWithShadow(client.textRenderer, Text.translatable("chat.queue", queuedMessages), 0, 1, 0xFFFFFF + (queueTextAlpha << 24));
+			context.drawTextWithShadow(textRenderer, Text.translatable("chat.queue", queuedMessages), 0, 1, 0xFFFFFF + (queueTextAlpha << 24));
 			context.getMatrices().popMatrix();
 		}
 
@@ -189,6 +158,13 @@ public abstract class ChatComponentMixin {
 		}
 
 		context.getMatrices().popMatrix();
+	}
+
+	@Unique
+	private static double linkpreview$messageOpacityMultiplier(int age) {
+		double opacity = 1.0D - (double) age / 200.0D;
+		opacity = MathHelper.clamp(opacity * 10.0D, 0.0D, 1.0D);
+		return opacity * opacity;
 	}
 
 	@Unique
