@@ -37,7 +37,8 @@ import net.minecraft.client.gui.hud.ChatHudLine;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.BufferRenderer;
-import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.gl.ShaderProgramKeys;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexFormat;
 import net.minecraft.client.render.VertexFormats;
@@ -71,6 +72,7 @@ public final class PreviewCardStore {
 	private static final int TEXT = 0xFFE6EDF3;
 	private static final int MUTED = 0xFF9CA3AF;
 	private static final int TITLE = 0xFF2F81F7;
+	private static final float TEXTURE_Z = 100.0F;
 
 	private final List<PreviewCard> cards = new ArrayList<>();
 	private long nextId;
@@ -266,18 +268,19 @@ public final class PreviewCardStore {
 			int targetX = imageX + (THUMBNAIL_WIDTH - targetWidth) / 2;
 			int targetY = imageY + (THUMBNAIL_HEIGHT - targetHeight) / 2;
 
-			drawTexture(
-					graphics,
+			graphics.drawTexture(
+					RenderLayer::getGuiTextured,
 					card.image().textureId(),
 					targetX,
 					targetY,
+					0.0F,
+					0.0F,
 					targetWidth,
 					targetHeight,
 					sourceWidth,
 					sourceHeight,
 					sourceWidth,
-					sourceHeight,
-					withAlpha(0xFFFFFFFF, alpha)
+					sourceHeight
 			);
 		} else {
 			String label = card.imageFailed() ? "No image" : spinner() + " Loading";
@@ -354,16 +357,23 @@ public final class PreviewCardStore {
 		int y2 = y + height;
 
 		RenderSystem.setShaderTexture(0, textureId);
-		RenderSystem.setShader(GameRenderer::getPositionTexColorProgram);
+		RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
+		float[] shaderColor = RenderSystem.getShaderColor().clone();
+		RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 		RenderSystem.enableBlend();
-		Matrix4f matrix = graphics.getMatrices().peek().getPositionMatrix();
-		BufferBuilder bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
-		bufferBuilder.vertex(matrix, x, y, 0).texture(u1, v1).color(red, green, blue, alpha);
-		bufferBuilder.vertex(matrix, x, y2, 0).texture(u1, v2).color(red, green, blue, alpha);
-		bufferBuilder.vertex(matrix, x2, y2, 0).texture(u2, v2).color(red, green, blue, alpha);
-		bufferBuilder.vertex(matrix, x2, y, 0).texture(u2, v1).color(red, green, blue, alpha);
-		BufferRenderer.drawWithGlobalProgram(bufferBuilder.end());
-		RenderSystem.disableBlend();
+		RenderSystem.defaultBlendFunc();
+		try {
+			Matrix4f matrix = graphics.getMatrices().peek().getPositionMatrix();
+			BufferBuilder bufferBuilder = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
+			bufferBuilder.vertex(matrix, x, y, TEXTURE_Z).texture(u1, v1).color(red, green, blue, alpha);
+			bufferBuilder.vertex(matrix, x, y2, TEXTURE_Z).texture(u1, v2).color(red, green, blue, alpha);
+			bufferBuilder.vertex(matrix, x2, y2, TEXTURE_Z).texture(u2, v2).color(red, green, blue, alpha);
+			bufferBuilder.vertex(matrix, x2, y, TEXTURE_Z).texture(u2, v1).color(red, green, blue, alpha);
+			BufferRenderer.drawWithGlobalProgram(bufferBuilder.end());
+		} finally {
+			RenderSystem.setShaderColor(shaderColor[0], shaderColor[1], shaderColor[2], shaderColor[3]);
+			RenderSystem.disableBlend();
+		}
 	}
 
 	private static int nextEmojiStart(String text, int start) {
@@ -469,7 +479,7 @@ public final class PreviewCardStore {
 			NativeImage nativeImage = new NativeImage(CANVAS_SIZE, CANVAS_SIZE, false);
 			for (int y = 0; y < CANVAS_SIZE; y++) {
 				for (int x = 0; x < CANVAS_SIZE; x++) {
-					nativeImage.setColor(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
+					nativeImage.setColorArgb(x, y, bufferedImage.getRGB(x, y));
 				}
 			}
 
@@ -502,7 +512,7 @@ public final class PreviewCardStore {
 		private static void finishGoogleFetch(String emoji, byte[] bytes) {
 			FETCHING.remove(emoji);
 			try {
-				NativeImage nativeImage = downscaleEmoji(readImage(bytes));
+				NativeImage nativeImage = downscaleEmoji(readImage(bytes, false));
 				Identifier id = Identifier.of(LinkPreviewClient.MOD_ID, "emoji/" + Integer.toHexString(emoji.hashCode()) + "_google");
 				NativeImageBackedTexture texture = new NativeImageBackedTexture(nativeImage);
 				MinecraftClient.getInstance().getTextureManager().registerTexture(id, texture);
@@ -537,7 +547,7 @@ public final class PreviewCardStore {
 			NativeImage target = new NativeImage(EMOJI_TEXTURE_SIZE, EMOJI_TEXTURE_SIZE, false);
 			for (int y = 0; y < EMOJI_TEXTURE_SIZE; y++) {
 				for (int x = 0; x < EMOJI_TEXTURE_SIZE; x++) {
-					target.setColor(x, y, averagedPixel(source, x, y));
+					target.setColorArgb(x, y, averagedPixel(source, x, y));
 				}
 			}
 
@@ -558,11 +568,11 @@ public final class PreviewCardStore {
 
 			for (int y = startY; y < endY; y++) {
 				for (int x = startX; x < endX; x++) {
-					int pixel = source.getColor(Math.min(source.getWidth() - 1, x), Math.min(source.getHeight() - 1, y));
+					int pixel = source.getColorArgb(Math.min(source.getWidth() - 1, x), Math.min(source.getHeight() - 1, y));
 					alpha += (pixel >>> 24) & 0xFF;
-					blue += (pixel >>> 16) & 0xFF;
+					red += (pixel >>> 16) & 0xFF;
 					green += (pixel >>> 8) & 0xFF;
-					red += pixel & 0xFF;
+					blue += pixel & 0xFF;
 					count++;
 				}
 			}
@@ -688,7 +698,7 @@ public final class PreviewCardStore {
 				}
 			}
 
-			return Optional.of(PreparedPreviewImage.staticImage(readImage(imageBytes)));
+			return Optional.of(PreparedPreviewImage.staticImage(readImage(imageBytes, true)));
 		} catch (IOException exception) {
 			LinkPreviewClient.LOGGER.warn("Failed to decode LinkPreview image. Worker may be returning an unsupported image format.", exception);
 			return Optional.empty();
@@ -760,7 +770,7 @@ public final class PreviewCardStore {
 					graphics.dispose();
 				}
 
-				frames.add(bufferedToNative(canvas));
+				frames.add(bufferedToNative(canvas, true));
 				delays.add(metadata.delayMillis());
 				applyGifDisposal(canvas, beforeFrame, metadata, frame.getWidth(), frame.getHeight());
 			}
@@ -884,13 +894,13 @@ public final class PreviewCardStore {
 		return copy;
 	}
 
-	private static NativeImage readImage(byte[] imageBytes) throws IOException {
+	private static NativeImage readImage(byte[] imageBytes, boolean forceOpaque) throws IOException {
 		BufferedImage bufferedImage = ImageIO.read(new ByteArrayInputStream(imageBytes));
 		if (bufferedImage == null) {
 			throw new IOException("Unsupported image format");
 		}
 
-		return bufferedToNative(bufferedImage);
+		return bufferedToNative(bufferedImage, forceOpaque);
 	}
 
 	private static NativeImage copyNative(NativeImage source) {
@@ -899,19 +909,16 @@ public final class PreviewCardStore {
 		return copy;
 	}
 
-	private static NativeImage bufferedToNative(BufferedImage bufferedImage) {
+	private static NativeImage bufferedToNative(BufferedImage bufferedImage, boolean forceOpaque) {
 		NativeImage nativeImage = new NativeImage(bufferedImage.getWidth(), bufferedImage.getHeight(), false);
 		for (int y = 0; y < bufferedImage.getHeight(); y++) {
 			for (int x = 0; x < bufferedImage.getWidth(); x++) {
-				nativeImage.setColor(x, y, argbToAbgr(bufferedImage.getRGB(x, y)));
+				int argb = bufferedImage.getRGB(x, y);
+				nativeImage.setColorArgb(x, y, forceOpaque ? argb | 0xFF000000 : argb);
 			}
 		}
 
 		return nativeImage;
-	}
-
-	private static int argbToAbgr(int argb) {
-		return (argb & 0xFF00FF00) | ((argb & 0x00FF0000) >> 16) | ((argb & 0x000000FF) << 16);
 	}
 
 	record PreparedPreviewImage(NativeImage staticPixels, int width, int height, List<NativeImage> frames, int[] frameDelaysMillis) {
